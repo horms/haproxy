@@ -951,6 +951,29 @@ void run_poll_loop()
 }
 
 
+/* setgid / setuid. Returns 0 on error. */
+static int setid(const char *name)
+{
+	if (getuid())
+		return 1;
+
+	if (global.gid && setgid(global.gid) == -1) {
+		if (setgid(global.gid) == -1) {
+			Alert("[%s.setid()] Cannot set gid %d.\n",
+			      name, global.gid);
+			return 0;
+		}
+	}
+
+	if (global.uid && setuid(global.uid) == -1) {
+		Alert("[%s.setid()] Cannot set uid %d.\n",
+		      name, global.uid);
+		return 0;
+	}
+
+	return 1;
+}
+
 int main(int argc, char **argv)
 {
 	int err, retry;
@@ -1134,19 +1157,6 @@ int main(int argc, char **argv)
 	 * be able to restart the old pids.
 	 */
 
-	/* setgid / setuid */
-	if (global.gid && setgid(global.gid) == -1) {
-		Alert("[%s.main()] Cannot set gid %d.\n", argv[0], global.gid);
-		protocol_unbind_all();
-		exit(1);
-	}
-
-	if (global.uid && setuid(global.uid) == -1) {
-		Alert("[%s.main()] Cannot set uid %d.\n", argv[0], global.uid);
-		protocol_unbind_all();
-		exit(1);
-	}
-
 	/* check ulimits */
 	limit.rlim_cur = limit.rlim_max = 0;
 	getrlimit(RLIMIT_NOFILE, &limit);
@@ -1212,6 +1222,11 @@ int main(int argc, char **argv)
 		pid = getpid(); /* update child's pid */
 		setsid();
 		fork_poller();
+	}
+
+	if (!setid(argv[0])) {
+		protocol_unbind_all();
+		exit(1);
 	}
 
 	protocol_enable_all();
