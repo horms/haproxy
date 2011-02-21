@@ -121,6 +121,7 @@ extern const int zero;
 extern const int one;
 extern const struct linger nolinger;
 extern int stopping;	/* non zero means stopping in progress */
+extern int is_master;
 extern char hostname[MAX_HOSTNAME_LEN];
 extern char localpeer[MAX_HOSTNAME_LEN];
 

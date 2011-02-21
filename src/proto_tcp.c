@@ -479,6 +479,7 @@ int tcp_bind_listener(struct listener *listener, char *errmsg, int errlen)
 	__label__ tcp_return, tcp_close_return;
 	int fd, err;
 	const char *msg = NULL;
+	int is_cached = 0;
 
 	/* ensure we never return garbage */
 	if (errmsg && errlen)
@@ -489,7 +490,9 @@ int tcp_bind_listener(struct listener *listener, char *errmsg, int errlen)
 
 	err = ERR_NONE;
 
-	if ((fd = socket(listener->addr.ss_family, SOCK_STREAM, IPPROTO_TCP)) == -1) {
+	if ((fd = socket_cache_get(listener)) >= 0)
+		is_cached = 1;
+	else if ((fd = socket(listener->addr.ss_family, SOCK_STREAM, IPPROTO_TCP)) == -1) {
 		err |= ERR_RETRYABLE | ERR_ALERT;
 		msg = "cannot create listening socket";
 		goto tcp_return;
@@ -500,6 +503,9 @@ int tcp_bind_listener(struct listener *listener, char *errmsg, int errlen)
 		msg = "not enough free sockets (raise '-n' parameter)";
 		goto tcp_close_return;
 	}
+
+	if (is_cached)
+		goto cached;
 
 	if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1) {
 		err |= ERR_FATAL | ERR_ALERT;
@@ -576,6 +582,8 @@ int tcp_bind_listener(struct listener *listener, char *errmsg, int errlen)
 		setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, (char *) &zero, sizeof(zero));
 #endif
 
+	socket_cache_add(fd, listener);
+ cached:
 	/* the socket is ready */
 	listener->fd = fd;
 	listener->state = LI_LISTEN;

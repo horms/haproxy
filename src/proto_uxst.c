@@ -132,8 +132,16 @@ static int uxst_bind_listener(struct listener *listener, char *errmsg, int errle
 
 	if (listener->state != LI_ASSIGNED)
 		return ERR_NONE; /* already bound */
-		
+
 	path = ((struct sockaddr_un *)&listener->addr)->sun_path;
+
+	if ((fd = socket_cache_get(listener)) >= 0) {
+		if (fd >= global.maxsock) {
+			msg = "socket(): not enough free sockets, raise -n argument";
+			goto err_unlink_temp;
+		}
+		goto cached;
+	}
 
 	/* 1. create socket names */
 	if (!path[0]) {
@@ -227,6 +235,8 @@ static int uxst_bind_listener(struct listener *listener, char *errmsg, int errle
 	/* 6. cleanup */
 	unlink(backname); /* no need to keep this one either */
 
+	socket_cache_add(fd, listener);
+ cached:
 	/* the socket is now listening */
 	listener->fd = fd;
 	listener->state = LI_LISTEN;

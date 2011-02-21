@@ -87,6 +87,11 @@ static inline void fd_insert(int fd)
 		maxfd = fd + 1;
 }
 
+void socket_cache_make_all_available(void);
+int socket_cache_get(const struct listener *listener);
+void socket_cache_gc(void);
+int socket_cache_add(int fd, struct listener *listener);
+
 
 #endif /* _PROTO_FD_H */
 

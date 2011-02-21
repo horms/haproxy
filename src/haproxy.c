@@ -1165,6 +1165,8 @@ int main(int argc, char **argv)
 			argv[0], (int)limit.rlim_cur, global.maxconn, global.maxsock, global.maxsock);
 	}
 
+	socket_cache_gc();
+
 	if (global.mode & MODE_DAEMON) {
 		struct proxy *px;
 		int ret = 0;

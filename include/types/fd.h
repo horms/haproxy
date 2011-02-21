@@ -136,6 +136,34 @@ extern int maxfd;                       /* # of the highest fd + 1 */
 extern int totalconn;                   /* total # of terminated sessions */
 extern int actconn;                     /* # of active sessions */
 
+/* The socket cache allows bound sockets to be looked up
+ * by the code that would bind them
+ */
+struct socket_cache {
+	struct socket_cache *next;	/* next entry in the cache, or NULL */
+	int fd;				/* the listen socket */
+	int state;			/* state: NEW, ASSIGNED */
+	char *interface;		/* interface name or NULL */
+
+	/* Body */
+	int sock_type;			/* As passed to socket() */
+	int sock_prot;			/* As passed to socket() */
+	socklen_t sock_addrlen;		/* socket address length, used by bind() */
+	struct sockaddr_storage addr;	/* the address we listen to */
+	int options;			/* socket options : LI_O_* */
+	int maxconn;			/* maximum connections allowed on this listener */
+	unsigned int backlog;		/* if set, listen backlog */
+	union {				/* protocol-dependant access restrictions */
+		struct {		/* UNIX socket permissions */
+			uid_t uid;	/* -1 to leave unchanged */
+			gid_t gid;	/* -1 to leave unchanged */
+			mode_t mode;	/* 0 to leave unchanged */
+			int level;	/* access level (ACCESS_LVL_*) */
+		} ux;
+	} perm;
+	int maxseg;			/* for TCP, advertised MSS */
+};
+
 #endif /* _TYPES_FD_H */
 
 /*

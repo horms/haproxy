@@ -18,6 +18,8 @@
 #include <common/compat.h>
 #include <common/config.h>
 
+#include <types/protocols.h>
+
 #include <proto/fd.h>
 #include <proto/port_range.h>
 
@@ -31,6 +33,7 @@ struct poller pollers[MAX_POLLERS];
 struct poller cur_poller;
 int nbpollers = 0;
 
+static struct socket_cache *socket_cache = NULL;
 
 /* Deletes an FD from the fdsets, and recomputes the maxfd limit.
  * The file descriptor is also closed.
@@ -172,6 +175,138 @@ int fork_poller()
 		return 0;
 	}
 	return 1;
+}
+
+enum {
+	SC_AVAILABLE,
+	SC_INVALID,
+	SC_INUSE
+};
+
+void socket_cache_make_all_available(void)
+{
+	struct socket_cache *e;
+
+	for (e = socket_cache; e; e = e->next)
+		e->state = SC_AVAILABLE;
+}
+
+void socket_cache_gc(void)
+{
+	struct socket_cache *e, *next, *prev = NULL;
+
+	for (e = socket_cache; e; e = next) {
+		next = e->next;
+		if (e->state == SC_INUSE) {
+			prev = e;
+			continue;
+		}
+		if (prev)
+			prev->next = e->next;
+		else
+			socket_cache = e->next;
+		if (e->state != SC_INVALID)
+			fd_delete(e->fd);
+		free(e);
+	}
+}
+
+static void socket_cache_body_assign(struct socket_cache *e,
+				     const struct listener *listener)
+{
+	e->sock_type = listener->proto->sock_type;
+	e->sock_prot = listener->proto->sock_prot;
+	e->sock_addrlen = listener->proto->sock_addrlen;
+	e->options = listener->options &
+		(LI_O_NOLINGER|LI_O_FOREIGN|LI_O_NOQUICKACK|LI_O_DEF_ACCEPT);
+	e->addr = listener->addr;
+	e->maxconn = listener->maxconn;
+	e->backlog = listener->backlog;
+	memcpy(&e->perm, &listener->perm, sizeof(e->perm));
+	e->maxseg = listener->maxseg;
+}
+
+#ifndef offsetof
+#define offsetof(type, member) ((size_t)&((type *)NULL)->member)
+#endif
+
+static int socket_cache_cmp(const struct socket_cache *a,
+			    const struct socket_cache *b)
+{
+	size_t start = offsetof(typeof(*a), sock_type);
+	size_t end = offsetof(typeof(*a), addr) + sizeof(a->addr);
+
+	return memcmp((const char *)a + start, (const char *)b + start,
+		      end - start);
+}
+
+static int socket_cache_cmp_detail(const struct socket_cache *a,
+				const struct socket_cache *b)
+{
+	size_t start = offsetof(typeof(*a), options);
+	size_t end = offsetof(typeof(*a), maxseg) + sizeof(a->maxseg);
+
+	if ((a->interface || b->interface) &&
+	    (!a->interface || !b->interface ||
+	      strcmp(a->interface, b->interface)))
+	     return -1;
+
+	return memcmp((const char *)a + start, (const char *)b + start,
+		      end - start);
+}
+
+int socket_cache_get(const struct listener *listener)
+{
+	struct socket_cache a = {}, *b;
+
+	socket_cache_body_assign(&a, listener);
+	a.interface = listener->interface;
+
+	/* First find a cache entry whose type, protocol and address match
+	 * which is available.  There should only ever be at most one match.
+	 * If this match matches the listener's details then use it.
+	 * Else close its fd and invalidate it as it is of no use
+	 * and will prevent binding of a fresh socket.
+	 */
+	for (b = socket_cache; b; b = b->next) {
+		if (b->state == SC_AVAILABLE && !socket_cache_cmp(&a, b)) {
+			if (!socket_cache_cmp_detail(&a, b)) {
+				b->state = SC_INUSE;
+				return b->fd;
+			}
+			fd_delete(b->fd);
+			b->state = SC_INVALID;
+			break;
+		}
+	}
+
+	return -1;
+}
+
+int socket_cache_add(int fd, struct listener *listener)
+{
+	struct socket_cache *e;
+
+	e = calloc(1, sizeof(struct socket_cache));
+	if (!e)
+		return -1;
+
+	e->fd = fd;
+	e->state = SC_INUSE;
+	if (listener->interface) {
+		e->interface = strdup(listener->interface);
+		if (!e->interface) {
+			free(e);
+			return -1;
+		}
+	}
+	socket_cache_body_assign(e, listener);
+
+	if (socket_cache)
+		e->next = socket_cache;
+	socket_cache = e;
+
+	return 0;
 }
 
 /*
