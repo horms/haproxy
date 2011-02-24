@@ -974,7 +974,7 @@ static int setid(const char *name)
 	return 1;
 }
 
-int main(int argc, char **argv)
+void run(int argc, char **argv)
 {
 	int err, retry;
 	struct rlimit limit;
@@ -999,7 +999,7 @@ int main(int argc, char **argv)
 	if (global.rlimit_nofile) {
 		limit.rlim_cur = limit.rlim_max = global.rlimit_nofile;
 		if (setrlimit(RLIMIT_NOFILE, &limit) == -1) {
-			Warning("[%s.main()] Cannot raise FD limit to %d.\n", argv[0], global.rlimit_nofile);
+			Warning("[%s.run()] Cannot raise FD limit to %d.\n", argv[0], global.rlimit_nofile);
 		}
 	}
 
@@ -1008,12 +1008,12 @@ int main(int argc, char **argv)
 			global.rlimit_memmax * 1048576 / global.nbproc;
 #ifdef RLIMIT_AS
 		if (setrlimit(RLIMIT_AS, &limit) == -1) {
-			Warning("[%s.main()] Cannot fix MEM limit to %d megs.\n",
+			Warning("[%s.run()] Cannot fix MEM limit to %d megs.\n",
 				argv[0], global.rlimit_memmax);
 		}
 #else
 		if (setrlimit(RLIMIT_DATA, &limit) == -1) {
-			Warning("[%s.main()] Cannot fix MEM limit to %d megs.\n",
+			Warning("[%s.run()] Cannot fix MEM limit to %d megs.\n",
 				argv[0], global.rlimit_memmax);
 		}
 #endif
@@ -1060,7 +1060,7 @@ int main(int argc, char **argv)
 	}
 
 	if (listeners == 0) {
-		Alert("[%s.main()] No enabled listener found (check the <listen> keywords) ! Exiting.\n", argv[0]);
+		Alert("[%s.run()] No enabled listener found (check the <listen> keywords) ! Exiting.\n", argv[0]);
 		/* Note: we don't have to send anything to the old pids because we
 		 * never stopped them. */
 		exit(1);
@@ -1069,15 +1069,15 @@ int main(int argc, char **argv)
 	err = protocol_bind_all(errmsg, sizeof(errmsg));
 	if ((err & ~ERR_WARN) != ERR_NONE) {
 		if ((err & ERR_ALERT) || (err & ERR_WARN))
-			Alert("[%s.main()] %s.\n", argv[0], errmsg);
+			Alert("[%s.run()] %s.\n", argv[0], errmsg);
 
-		Alert("[%s.main()] Some protocols failed to start their listeners! Exiting.\n", argv[0]);
+		Alert("[%s.run()] Some protocols failed to start their listeners! Exiting.\n", argv[0]);
 		protocol_unbind_all(); /* cleanup everything we can */
 		if (nb_oldpids)
 			tell_old_pids(SIGTTIN);
 		exit(1);
 	} else if (err & ERR_WARN) {
-		Alert("[%s.main()] %s.\n", argv[0], errmsg);
+		Alert("[%s.run()] %s.\n", argv[0], errmsg);
 	}
 
 	/* prepare pause/play signals */
@@ -1098,7 +1098,7 @@ int main(int argc, char **argv)
 		unlink(global.pidfile);
 		pidfd = open(global.pidfile, O_CREAT | O_WRONLY | O_TRUNC, 0644);
 		if (pidfd < 0) {
-			Alert("[%s.main()] Cannot create pidfile %s\n", argv[0], global.pidfile);
+			Alert("[%s.run()] Cannot create pidfile %s\n", argv[0], global.pidfile);
 			if (nb_oldpids)
 				tell_old_pids(SIGTTIN);
 			protocol_unbind_all();
@@ -1113,7 +1113,7 @@ int main(int argc, char **argv)
 
 		ret = check_cttproxy_version();
 		if (ret < 0) {
-			Alert("[%s.main()] Cannot enable cttproxy.\n%s",
+			Alert("[%s.run()] Cannot enable cttproxy.\n%s",
 			      argv[0],
 			      (ret == -1) ? "  Incorrect module version.\n"
 			      : "  Make sure you have enough permissions and that the module is loaded.\n");
@@ -1124,7 +1124,7 @@ int main(int argc, char **argv)
 #endif
 
 	if ((global.last_checks & LSTCHK_NETADM) && global.uid) {
-		Alert("[%s.main()] Some configuration options require full privileges, so global.uid cannot be changed.\n"
+		Alert("[%s.run()] Some configuration options require full privileges, so global.uid cannot be changed.\n"
 		      "", argv[0]);
 		protocol_unbind_all();
 		exit(1);
@@ -1134,14 +1134,14 @@ int main(int argc, char **argv)
 	 * but we inform him that unexpected behaviour may occur.
 	 */
 	if ((global.last_checks & LSTCHK_NETADM) && getuid())
-		Warning("[%s.main()] Some options which require full privileges"
+		Warning("[%s.run()] Some options which require full privileges"
 			" might not work well.\n"
 			"", argv[0]);
 
 	/* chroot if needed */
 	if (global.chroot != NULL) {
 		if (chroot(global.chroot) == -1) {
-			Alert("[%s.main()] Cannot chroot(%s).\n", argv[0], global.chroot);
+			Alert("[%s.run()] Cannot chroot(%s).\n", argv[0], global.chroot);
 			if (nb_oldpids)
 				tell_old_pids(SIGTTIN);
 			protocol_unbind_all();
@@ -1161,7 +1161,7 @@ int main(int argc, char **argv)
 	limit.rlim_cur = limit.rlim_max = 0;
 	getrlimit(RLIMIT_NOFILE, &limit);
 	if (limit.rlim_cur < global.maxsock) {
-		Warning("[%s.main()] FD limit (%d) too low for maxconn=%d/maxsock=%d. Please raise 'ulimit-n' to %d or more to avoid any trouble.\n",
+		Warning("[%s.run()] FD limit (%d) too low for maxconn=%d/maxsock=%d. Please raise 'ulimit-n' to %d or more to avoid any trouble.\n",
 			argv[0], (int)limit.rlim_cur, global.maxconn, global.maxsock, global.maxsock);
 	}
 
@@ -1176,7 +1176,7 @@ int main(int argc, char **argv)
 		for (proc = 0; proc < global.nbproc; proc++) {
 			ret = fork();
 			if (ret < 0) {
-				Alert("[%s.main()] Cannot fork.\n", argv[0]);
+				Alert("[%s.run()] Cannot fork.\n", argv[0]);
 				protocol_unbind_all();
 				exit(1); /* there has been an error */
 			}
@@ -1241,10 +1241,13 @@ int main(int argc, char **argv)
 	appsession_cleanup();
 	/* Do some cleanup */ 
 	deinit();
-    
-	exit(0);
 }
 
+int main(int argc, char **argv)
+{
+	run(argc, argv);
+	exit(0);
+}
 
 /*
  * Local variables:
