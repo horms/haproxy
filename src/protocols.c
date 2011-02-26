@@ -82,6 +82,8 @@ int disable_all_listeners(struct protocol *proto)
 	return ERR_NONE;
 }
 
+extern int is_master;
+
 /* This function closes the listening socket for the specified listener,
  * provided that it's already in a listening state. The listener enters the
  * LI_ASSIGNED state. It always returns ERR_NONE. This function is intended
@@ -93,7 +95,8 @@ int unbind_listener(struct listener *listener)
 		EV_FD_CLR(listener->fd, DIR_RD);
 
 	if (listener->state >= LI_LISTEN) {
-		fd_delete(listener->fd);
+		if (!is_master)
+			fd_delete(listener->fd);
 		listener->state = LI_ASSIGNED;
 	}
 	return ERR_NONE;

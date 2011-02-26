@@ -41,7 +41,7 @@ syn match   hapIp2       /,\(\d\{1,3}\.\d\{1,3}\.\d\{1,3}\.\d\{1,3}\)\?:\d\{1,5}
 
 " Parameters
 syn keyword hapParam     chroot cliexp clitimeout contimeout
-syn keyword hapParam     daemon debug disabled
+syn keyword hapParam     daemon debug disabled master-worker
 syn keyword hapParam     enabled
 syn keyword hapParam     fullconn
 syn keyword hapParam     gid grace group

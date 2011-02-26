@@ -460,6 +460,9 @@ int cfg_parse_global(const char *file, int linenum, char **args, int kwm)
 	else if (!strcmp(args[0], "daemon")) {
 		global.mode |= MODE_DAEMON;
 	}
+	else if (!strcmp(args[0], "master-worker")) {
+		global.mode |= MODE_MASTER_WORKER;
+	}
 	else if (!strcmp(args[0], "debug")) {
 		global.mode |= MODE_DEBUG;
 	}

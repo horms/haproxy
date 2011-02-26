@@ -214,6 +214,7 @@ void close_log(void)
 	if (logfdinet >= 0)
 		close(logfdinet);
 	logfdinet = -1;
+	tvsec = -1;
 }
 
 /*

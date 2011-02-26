@@ -228,6 +228,7 @@ void usage(char *name)
 		"        -c check mode : only check config files and exit\n"
 		"        -n sets the maximum total # of connections (%d)\n"
 		"        -m limits the usable amount of memory (in MB)\n"
+		"        -M master/worker mode\n"
 		"        -N sets the default, per-proxy maximum # of connections (%d)\n"
 		"        -L set local peer name (default to hostname)\n"
 		"        -p writes pids of all children to this file\n"
@@ -472,6 +473,8 @@ void init(int argc, char **argv)
 				arg_mode |= MODE_CHECK;
 			else if (*flag == 'D')
 				arg_mode |= MODE_DAEMON;
+			else if (*flag == 'M')
+				arg_mode |= MODE_MASTER_WORKER;
 			else if (*flag == 'q')
 				arg_mode |= MODE_QUIET;
 			else if (*flag == 's' && (flag[1] == 'f' || flag[1] == 't')) {
@@ -525,7 +528,8 @@ void init(int argc, char **argv)
 
 	global.mode = MODE_STARTING | /* during startup, we want most of the alerts */
 		(arg_mode & (MODE_DAEMON | MODE_FOREGROUND | MODE_VERBOSE
-			     | MODE_QUIET | MODE_CHECK | MODE_DEBUG));
+			     | MODE_QUIET | MODE_CHECK | MODE_DEBUG
+			     | MODE_MASTER_WORKER));
 
 	if (LIST_ISEMPTY(&cfg_cfgfiles))
 		usage(old_argv);
@@ -628,16 +632,18 @@ void init(int argc, char **argv)
 		global.mode &= ~(MODE_DAEMON | MODE_QUIET);
 	}
 	global.mode |= (arg_mode & (MODE_DAEMON | MODE_FOREGROUND | MODE_QUIET |
-				    MODE_VERBOSE | MODE_DEBUG ));
+				    MODE_VERBOSE | MODE_DEBUG |
+				    MODE_MASTER_WORKER));
 
 	if ((global.mode & MODE_DEBUG) && (global.mode & (MODE_DAEMON | MODE_QUIET))) {
 		Warning("<debug> mode incompatible with <quiet> and <daemon>. Keeping <debug> only.\n");
 		global.mode &= ~(MODE_DAEMON | MODE_QUIET);
 	}
 
-	if ((global.nbproc > 1) && !(global.mode & MODE_DAEMON)) {
+	if ((global.nbproc > 1) &&
+	    !(global.mode & (MODE_DAEMON|MODE_MASTER_WORKER))) {
 		if (!(global.mode & (MODE_FOREGROUND | MODE_DEBUG)))
-			Warning("<nbproc> is only meaningful in daemon mode. Setting limit to 1 process.\n");
+			Warning("<nbproc> is only meaningful if daemon or master/worker modes are enabled. Setting limit to 1 process.\n");
 		global.nbproc = 1;
 	}
 
@@ -897,7 +903,6 @@ void deinit(void)
 	free(global.node);    global.node = NULL;
 	free(global.desc);    global.desc = NULL;
 	free(fdtab);          fdtab   = NULL;
-	free(oldpids);        oldpids = NULL;
 
 	list_for_each_entry_safe(wl, wlb, &cfg_cfgfiles, list) {
 		LIST_DEL(&wl->list);
@@ -965,6 +970,11 @@ void run_poll_loop()
 		if (jobs == 0)
 			break;
 
+		if (is_master) {
+			sleep(1);
+			continue;
+		}
+
 		/* The poller will ensure it returns around <next> */
 		cur_poller.poll(&cur_poller, next);
 	}
@@ -997,14 +1007,21 @@ static int setid(const char *name)
 void run(int argc, char **argv)
 {
 	int err, retry;
+	int mode = global.mode & (MODE_DAEMON|MODE_MASTER_WORKER);
 	struct rlimit limit;
 	static FILE *pidfile = NULL;
 	char errmsg[100];
 
 	init(argc, argv);
+	/* daemon and master/worker modes can't be altered on restart */
+	if (is_master)
+		global.mode = (global.mode &
+			~(MODE_DAEMON|MODE_MASTER_WORKER)) | mode;
 	close_log(); /* It will automatically be reopened as needed */
 	signal_register_fct(SIGQUIT, dump, SIGQUIT);
 	signal_register_fct(SIGUSR1, sig_soft_stop, SIGUSR1);
+	if (global.mode & MODE_MASTER_WORKER)
+		signal_register_fct(SIGUSR2, sig_restart, SIGUSR2);
 	signal_register_fct(SIGHUP, sig_dump_state, SIGHUP);
 	signal_register_fct(SIGCHLD, sig_reaper, SIGCHLD);
 
@@ -1051,7 +1068,8 @@ void run(int argc, char **argv)
 		struct timeval w;
 		err = start_proxies(retry == 0 || nb_oldpids == 0);
 		/* exit the loop on no error or fatal error */
-		if ((err & (ERR_RETRYABLE|ERR_FATAL)) != ERR_RETRYABLE)
+		if (!(is_master && retry == MAX_START_RETRIES) &&
+		    (err & (ERR_RETRYABLE|ERR_FATAL)) != ERR_RETRYABLE)
 			break;
 		if (nb_oldpids == 0 || retry == 0)
 			break;
@@ -1060,7 +1078,7 @@ void run(int argc, char **argv)
 		 * listening sockets. So on those platforms, it would be wiser to
 		 * simply send SIGUSR1, which will not be undoable.
 		 */
-		if (tell_old_pids(SIGTTOU) == 0) {
+		if (tell_old_pids(is_master ? SIGUSR1 : SIGTTOU) == 0) {
 			/* no need to wait if we can't contact old pids */
 			retry = 0;
 			continue;
@@ -1190,25 +1208,80 @@ void run(int argc, char **argv)
 
 	socket_cache_gc();
 
-	if (global.mode & MODE_DAEMON) {
+	if (global.mode & (MODE_DAEMON|MODE_MASTER_WORKER)) {
 		struct proxy *px;
 		int ret = 0;
 		int proc;
+
+		/* Create master if it doesn't already exist,
+		 * is needed and is to be detached
+		 */
+		if (!is_master && global.mode & MODE_MASTER_WORKER) {
+			if (global.mode & MODE_DAEMON) {
+				ret = fork();
+				if (ret < 0) {
+					Alert("[%s.run()] Cannot fork.\n",
+					      argv[0]);
+					protocol_unbind_all();
+					exit(1); /* there has been an error */
+				}
+				if (ret > 0)
+					exit(0); /* Exit original process */
+
+				/* Child */
+				setsid();
+				close_log();
+				pid = getpid();
+			}
+			if (!(global.mode & MODE_QUIET))
+				send_log(NULL, LOG_INFO, "Master started\n");
+		}
+
+		if (pidfile != NULL) {
+			rewind(pidfile);
+			ftruncate(fileno(pidfile), 0);
+			if (global.mode & MODE_MASTER_WORKER) {
+				fprintf(pidfile, "%d\n", pid);
+				fflush(pidfile);
+			}
+		}
+
+		/* Store PIDs of worker processes in oldpid so
+		 * they can be signaled later */
+		nb_oldpids = global.nbproc;
+	        free(oldpids);
+		oldpids = malloc(nb_oldpids * sizeof(*oldpids));
+		if (!oldpids) {
+			send_log(NULL, LOG_ERR, "Cannot allocate memory "
+				 "for oldpids.\n");
+			protocol_unbind_all();
+			exit(1); /* there has been an error */
+		}
 
 		/* the father launches the required number of processes */
 		for (proc = 0; proc < global.nbproc; proc++) {
 			ret = fork();
 			if (ret < 0) {
-				Alert("[%s.run()] Cannot fork.\n", argv[0]);
+				send_log(NULL, LOG_ERR, "Cannot fork.\n");
 				protocol_unbind_all();
 				exit(1); /* there has been an error */
 			}
-			else if (ret == 0) /* child breaks here */
+			else if (ret == 0) { /* child breaks here */
+				if (!(global.mode & MODE_MASTER_WORKER))
+					setsid();
+				is_master = 0;
+				close_log();
+				pid = getpid();
+				if (!(global.mode & MODE_QUIET))
+					send_log(NULL, LOG_INFO,
+					         "Worker #%d started\n", proc);
 				break;
+			}
 			if (pidfile != NULL) {
 				fprintf(pidfile, "%d\n", ret);
 				fflush(pidfile);
 			}
+			oldpids[proc] = ret;
 			relative_pid++; /* each child will get a different one */
 		}
 		/* close the pidfile both in children and father */
@@ -1218,18 +1291,23 @@ void run(int argc, char **argv)
 		/* We won't ever use this anymore */
 		free(oldpids);        oldpids = NULL;
 
+		if (proc == global.nbproc) {
+			if (!(global.mode & MODE_MASTER_WORKER))
+				/* The parent process is no longer needed */
+				exit(0);
+			else
+				is_master = 1;
+		}
+
 		/* we might have to unbind some proxies from some processes */
 		px = proxy;
 		while (px != NULL) {
 			if (px->bind_proc && px->state != PR_STSTOPPED) {
-				if (!(px->bind_proc & (1 << proc)))
+				if (px->bind_proc & (1 << proc))
 					stop_proxy(px);
 			}
 			px = px->next;
 		}
-
-		if (proc == global.nbproc)
-			exit(0); /* parent must leave */
 
 		/* if we're NOT in QUIET mode, we should now close the 3 first FDs to ensure
 		 * that we can detach from the TTY. We MUST NOT do it in other cases since
@@ -1242,12 +1320,11 @@ void run(int argc, char **argv)
 			global.mode &= ~MODE_VERBOSE;
 			global.mode |= MODE_QUIET; /* ensure that we won't say anything from now */
 		}
-		pid = getpid(); /* update child's pid */
-		setsid();
+
 		fork_poller();
 	}
 
-	if (!setid(argv[0])) {
+	if (!is_master && !setid(argv[0])) {
 		protocol_unbind_all();
 		exit(1);
 	}
