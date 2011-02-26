@@ -99,7 +99,8 @@ int  pid;			/* current process id */
 int  relative_pid = 1;		/* process id starting at 1 */
 
 /* global options */
-struct global global = {
+struct global global;
+struct global global_default = {
 	logfac1 : -1,
 	logfac2 : -1,
 	loglev1 : 7, /* max syslog level : debug */
@@ -365,6 +366,12 @@ void init(int argc, char **argv)
 	int err_code = 0;
 	struct wordlist *wl;
 	char *progname;
+
+	global = global_default;
+	proxy = NULL;
+	used_proxy_id = EB_ROOT;
+	error_snapshot_id = 0;
+	jobs = 0;
 
 	/* NB: POSIX does not make it mandatory for gethostname() to NULL-terminate
 	 * the string in case of truncation, and at least FreeBSD appears not to do
