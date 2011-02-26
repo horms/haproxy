@@ -202,6 +202,20 @@ int get_log_facility(const char *fac)
 	return facility;
 }
 
+static int logfdunix = -1;	/* syslog to AF_UNIX socket */
+static int logfdinet = -1;	/* syslog to AF_INET socket */
+static long tvsec = -1;	/* to force the string to be initialized */
+
+void close_log(void)
+{
+	if (logfdunix >= 0)
+		close(logfdunix);
+	logfdunix = -1;
+	if (logfdinet >= 0)
+		close(logfdinet);
+	logfdinet = -1;
+}
+
 /*
  * This function sends a syslog message to both log servers of a proxy,
  * or to global log servers if the proxy is NULL.
@@ -211,9 +225,6 @@ int get_log_facility(const char *fac)
 static void vsend_log(struct proxy *p, int level, const char *message,
 		      va_list argp)
 {
-	static int logfdunix = -1;	/* syslog to AF_UNIX socket */
-	static int logfdinet = -1;	/* syslog to AF_INET socket */
-	static long tvsec = -1;	/* to force the string to be initialized */
 	static char logmsg[MAX_SYSLOG_LEN];
 	static char *dataptr = NULL;
 	int fac_level;

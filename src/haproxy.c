@@ -995,6 +995,7 @@ void run(int argc, char **argv)
 	char errmsg[100];
 
 	init(argc, argv);
+	close_log(); /* It will automatically be reopened as needed */
 	signal_register_fct(SIGQUIT, dump, SIGQUIT);
 	signal_register_fct(SIGUSR1, sig_soft_stop, SIGUSR1);
 	signal_register_fct(SIGHUP, sig_dump_state, SIGHUP);

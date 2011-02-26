@@ -66,6 +66,11 @@ void qfprintf(FILE *out, const char *fmt, ...)
 	__attribute__ ((format(printf, 2, 3)));
 
 /*
+ * Close and clean up logs
+ */
+void close_log(void);
+
+/*
  * This function sends a syslog message to both log servers of a proxy,
  * or to global log servers if the proxy is NULL.
  * It also tries not to waste too much time computing the message header.
