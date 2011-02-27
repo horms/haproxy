@@ -55,27 +55,64 @@ const char *monthname[12] = {
 const char sess_term_cond[8]  = "-cCsSPRI";	/* normal, CliTo, CliErr, SrvTo, SrvErr, PxErr, Resource, Internal */
 const char sess_fin_state[8]  = "-RCHDLQT";	/* cliRequest, srvConnect, srvHeader, Data, Last, Queue, Tarpit */
 
+static void vsend_log(struct proxy *p, int level, const char *message,
+		      va_list argp);
+
 /*
- * Displays the message on stderr with the date and pid. Overrides the quiet
- * mode during startup.
+ * Displays the message on stderr with the date and pid.
+ * Also logs the same message using the prevailing logger, if any,
+ * with a priority of LOG_ERR.
+ * Overrides the quiet mode during startup.
+ *
+ * Internal function, do not call directly.
  */
-void Alert(const char *fmt, ...)
+static void __Alert(int send_log, const char *fmt, va_list argp)
 {
-	va_list argp;
 	struct tm tm;
 
 	if (!(global.mode & MODE_QUIET) || (global.mode & (MODE_VERBOSE | MODE_STARTING))) {
-		va_start(argp, fmt);
+		if (send_log) {
+			va_list argp2;
+			__va_copy(argp2, argp);
+			vsend_log(NULL, LOG_ERR, fmt, argp2);
+			va_end(argp2);
+		}
 
 		get_localtime(date.tv_sec, &tm);
 		fprintf(stderr, "[ALERT] %03d/%02d%02d%02d (%d) : ",
 			tm.tm_yday, tm.tm_hour, tm.tm_min, tm.tm_sec, (int)getpid());
 		vfprintf(stderr, fmt, argp);
 		fflush(stderr);
-		va_end(argp);
 	}
 }
 
+/*
+ * Displays the message on stderr with the date and pid.
+ * Also logs the same message using the prevailing logger, if any,
+ * with a priority of LOG_ERR.
+ * Overrides the quiet mode during startup.
+ */
+void Alert(const char *fmt, ...)
+{
+	va_list argp;
+
+	va_start(argp, fmt);
+	__Alert(1, fmt, argp);
+	va_end(argp);
+}
+
+/*
+ * Displays the message on stderr with the date and pid. Overrides the quiet
+ * mode during startup.
+ */
+static void Alert_no_send_log(const char *fmt, ...)
+{
+	va_list argp;
+
+	va_start(argp, fmt);
+	__Alert(0, fmt, argp);
+	va_end(argp);
+}
 
 /*
  * Displays the message on stderr with the date and pid.
@@ -87,7 +124,10 @@ void Warning(const char *fmt, ...)
 
 	if (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE)) {
 		va_start(argp, fmt);
+		vsend_log(NULL, LOG_WARNING, fmt, argp);
+		va_end(argp);
 
+		va_start(argp, fmt);
 		get_localtime(date.tv_sec, &tm);
 		fprintf(stderr, "[WARNING] %03d/%02d%02d%02d (%d) : ",
 			tm.tm_yday, tm.tm_hour, tm.tm_min, tm.tm_sec, (int)getpid());
@@ -147,12 +187,12 @@ int get_log_facility(const char *fac)
  * It also tries not to waste too much time computing the message header.
  * It doesn't care about errors nor does it report them.
  */
-void send_log(struct proxy *p, int level, const char *message, ...)
+static void vsend_log(struct proxy *p, int level, const char *message,
+		      va_list argp)
 {
 	static int logfdunix = -1;	/* syslog to AF_UNIX socket */
 	static int logfdinet = -1;	/* syslog to AF_INET socket */
 	static long tvsec = -1;	/* to force the string to be initialized */
-	va_list argp;
 	static char logmsg[MAX_SYSLOG_LEN];
 	static char *dataptr = NULL;
 	int fac_level;
@@ -189,7 +229,6 @@ void send_log(struct proxy *p, int level, const char *message, ...)
 		dataptr = logmsg + hdr_len;
 	}
 
-	va_start(argp, message);
 	/*
 	 * FIXME: we take a huge performance hit here. We might have to replace
 	 * vsnprintf() for a hard-coded log writer.
@@ -197,7 +236,6 @@ void send_log(struct proxy *p, int level, const char *message, ...)
 	data_len = vsnprintf(dataptr, logmsg + sizeof(logmsg) - dataptr, message, argp);
 	if (data_len < 0 || data_len > (logmsg + sizeof(logmsg) - dataptr))
 		data_len = logmsg + sizeof(logmsg) - dataptr;
-	va_end(argp);
 	dataptr[data_len - 1] = '\n'; /* force a break on ultra-long lines */
 
 	if (p == NULL) {
@@ -250,8 +288,9 @@ void send_log(struct proxy *p, int level, const char *message, ...)
 		}
 		if ((*plogfd = socket(logsrv->addr.ss_family, SOCK_DGRAM,
 				proto)) < 0) {
-			Alert("socket for logger #%d failed: %s (errno=%d)\n",
-				nblogger + 1, strerror(errno), errno);
+			Alert_no_send_log("socket for logger "
+					  "#%d failed: %s (errno=%d)\n",
+					  nblogger + 1, strerror(errno), errno);
 			return;
 		}
 		/* we don't want to receive anything on this socket */
@@ -292,12 +331,26 @@ void send_log(struct proxy *p, int level, const char *message, ...)
 			      MSG_DONTWAIT | MSG_NOSIGNAL,
 			      (struct sockaddr *)&logsrv->addr, get_addr_len(&logsrv->addr));
 		if (sent < 0) {
-			Alert("sendto logger #%d failed: %s (errno=%d)\n",
-				nblogger, strerror(errno), errno);
+			Alert_no_send_log("sendto logger #%d failed: "
+					  "%s (errno=%d)\n",
+					  nblogger, strerror(errno), errno);
 		}
 	}
 }
 
+/*
+ * This function sends a syslog message to both log servers of a proxy,
+ * or to global log servers if the proxy is NULL.
+ * It also tries not to waste too much time computing the message header.
+ * It doesn't care about errors nor does it report them.
+ */
+void send_log(struct proxy *p, int level, const char *message, ...)
+{
+	va_list argp;
+	va_start(argp, message);
+	vsend_log(p, level, message, argp);
+	va_end(argp);
+}
 
 /*
  * send a log for the session when we have enough info about it
