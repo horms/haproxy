@@ -44,6 +44,7 @@
 #include <sys/resource.h>
 #include <time.h>
 #include <syslog.h>
+#include <sys/wait.h>
 
 #ifdef DEBUG_FULL
 #include <assert.h>
@@ -280,6 +281,15 @@ void sig_pause(struct sig_handler *sh)
 void sig_listen(struct sig_handler *sh)
 {
 	listen_proxies();
+}
+
+/*
+ * upon SIGCHLD reap child
+ */
+void sig_reaper(struct sig_handler *sh)
+{
+	int status;
+	while(waitpid(-1, &status, WNOHANG) > 0);
 }
 
 /*
@@ -985,6 +995,7 @@ void run(int argc, char **argv)
 	signal_register_fct(SIGQUIT, dump, SIGQUIT);
 	signal_register_fct(SIGUSR1, sig_soft_stop, SIGUSR1);
 	signal_register_fct(SIGHUP, sig_dump_state, SIGHUP);
+	signal_register_fct(SIGCHLD, sig_reaper, SIGCHLD);
 
 	/* Always catch SIGPIPE even on platforms which define MSG_NOSIGNAL.
 	 * Some recent FreeBSD setups report broken pipes, and MSG_NOSIGNAL
