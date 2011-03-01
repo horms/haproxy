@@ -998,7 +998,7 @@ void run(int argc, char **argv)
 {
 	int err, retry;
 	struct rlimit limit;
-	FILE *pidfile = NULL;
+	static FILE *pidfile = NULL;
 	char errmsg[100];
 
 	init(argc, argv);
@@ -1115,7 +1115,7 @@ void run(int argc, char **argv)
 	}
 
 	/* open log & pid files before the chroot */
-	if (global.mode & MODE_DAEMON && global.pidfile != NULL) {
+	if (!pidfile && global.mode & MODE_DAEMON && global.pidfile != NULL) {
 		int pidfd;
 		unlink(global.pidfile);
 		pidfd = open(global.pidfile, O_CREAT | O_WRONLY | O_TRUNC, 0644);
@@ -1128,6 +1128,7 @@ void run(int argc, char **argv)
 		}
 		pidfile = fdopen(pidfd, "w");
 	}
+	free(global.pidfile); global.pidfile = NULL;
 
 #ifdef CONFIG_HAP_CTTPROXY
 	if (global.last_checks & LSTCHK_CTTPROXY) {
@@ -1216,8 +1217,6 @@ void run(int argc, char **argv)
 
 		/* We won't ever use this anymore */
 		free(oldpids);        oldpids = NULL;
-		free(global.chroot);  global.chroot = NULL;
-		free(global.pidfile); global.pidfile = NULL;
 
 		/* we might have to unbind some proxies from some processes */
 		px = proxy;
