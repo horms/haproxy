@@ -25,6 +25,7 @@
 
 #include <stdio.h>
 #include <syslog.h>
+#include <stdarg.h>
 
 #include <common/config.h>
 #include <common/memory.h>
@@ -38,8 +39,19 @@ extern struct pool_head *pool2_requri;
  * Displays the message on stderr with the date and pid. Overrides the quiet
  * mode during startup.
  */
+void vAlert(const char *fmt, va_list argp);
+
+/*
+ * Displays the message on stderr with the date and pid. Overrides the quiet
+ * mode during startup.
+ */
 void Alert(const char *fmt, ...)
 	__attribute__ ((format(printf, 1, 2)));
+
+/*
+ * Displays the message on stderr with the date and pid.
+ */
+void vWarning(const char *fmt, va_list argp);
 
 /*
  * Displays the message on stderr with the date and pid.

@@ -92,6 +92,17 @@ static void __Alert(int send_log, const char *fmt, va_list argp)
  * with a priority of LOG_ERR.
  * Overrides the quiet mode during startup.
  */
+void vAlert(const char *fmt, va_list argp)
+{
+	__Alert(1, fmt, argp);
+}
+
+/*
+ * Displays the message on stderr with the date and pid.
+ * Also logs the same message using the prevailing logger, if any,
+ * with a priority of LOG_ERR.
+ * Overrides the quiet mode during startup.
+ */
 void Alert(const char *fmt, ...)
 {
 	va_list argp;
@@ -117,24 +128,34 @@ static void Alert_no_send_log(const char *fmt, ...)
 /*
  * Displays the message on stderr with the date and pid.
  */
-void Warning(const char *fmt, ...)
+void vWarning(const char *fmt, va_list argp)
 {
-	va_list argp;
+	va_list argp2;
 	struct tm tm;
 
 	if (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE)) {
-		va_start(argp, fmt);
-		vsend_log(NULL, LOG_WARNING, fmt, argp);
-		va_end(argp);
+		__va_copy(argp2, argp);
+		vsend_log(NULL, LOG_WARNING, fmt, argp2);
+		va_end(argp2);
 
-		va_start(argp, fmt);
 		get_localtime(date.tv_sec, &tm);
 		fprintf(stderr, "[WARNING] %03d/%02d%02d%02d (%d) : ",
 			tm.tm_yday, tm.tm_hour, tm.tm_min, tm.tm_sec, (int)getpid());
 		vfprintf(stderr, fmt, argp);
 		fflush(stderr);
-		va_end(argp);
 	}
+}
+
+/*
+ * Displays the message on stderr with the date and pid.
+ */
+void Warning(const char *fmt, ...)
+{
+	va_list argp;
+
+	va_start(argp, fmt);
+	vWarning(fmt, argp);
+	va_end(argp);
 }
 
 /*
