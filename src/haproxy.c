@@ -134,6 +134,7 @@ struct global global_default = {
 
 int stopping;	/* non zero means stopping in progress */
 int restarting;	/* non zero means restart in progress */
+int replacing_workers = 0;	/* non zero means replacing workers in progress */
 int is_master = 0;	/* non zero means that master/worker mode
 			 * has been activated and the current process
 			 * is the master */
@@ -318,6 +319,16 @@ void sig_listen(struct sig_handler *sh)
 /*
  * upon SIGCHLD reap child
  */
+
+static struct task *replace_workers_task = NULL;
+
+struct task *task_replace_workers(struct task *t)
+{
+	replacing_workers = 1;
+	t->expire = TICK_ETERNITY;
+	return t;
+}
+
 void sig_reaper(struct sig_handler *sh)
 {
 	int status, p;
@@ -327,12 +338,23 @@ void sig_reaper(struct sig_handler *sh)
 		pid = waitpid(-1, &status, WNOHANG);
 		if (pid <= 0)
 			break;
+		status = 0;
 		for (p = 0; p < nb_allocated_oldpids; p++)
 			if (oldpids[p] == pid) {
 				oldpids[p] = 0;
 				nb_oldpids--;
+				status++;
 				break;
 			}
+	}
+
+	/* Delay replacing workers for 3s to mitigate the possibility
+	 * of a restart storm. */
+	if (status) {
+		tv_update_date(0,1); /* else, the old time before select
+				      *	will be used */
+		replace_workers_task->expire = tick_add_ifset(now_ms, 3000);
+		task_queue(replace_workers_task);
 	}
 }
 
@@ -761,6 +783,13 @@ void deinit(void)
 	int i;
 
 	deinit_signals();
+
+	if (replace_workers_task) {
+		task_delete(replace_workers_task);
+		task_free(replace_workers_task);
+		replace_workers_task = NULL;
+	}
+
 	while (p) {
 		free(p->id);
 		free(p->check_req);
@@ -985,6 +1014,11 @@ static int tell_old_pids(int sig)
 	return ret;
 }
 
+int worker_missing()
+{
+	return nb_allocated_oldpids != nb_oldpids;
+}
+
 /*
  * Runs the polling loop
  *
@@ -1024,9 +1058,11 @@ void run_poll_loop()
 			break;
 		}
 
-		if (is_master) {
-			sleep(1);
-			continue;
+		if (replacing_workers) {
+			send_log(NULL, LOG_INFO,
+				"Replacing %d workers.\n",
+				nb_allocated_oldpids - nb_oldpids);
+			break;
 		}
 
 		/* The poller will ensure it returns around <next> */
@@ -1085,7 +1121,6 @@ static FILE *prepare(int argc, char **argv)
 		signal_register_fct(SIGUSR2, sig_restart, SIGUSR2);
 	signal_register_fct(SIGHUP, sig_dump_state, SIGHUP);
 	signal_register_fct(SIGTERM, sig_term, SIGTERM);
-	signal_register_fct(SIGCHLD, sig_reaper, SIGCHLD);
 
 	/* Always catch SIGPIPE even on platforms which define MSG_NOSIGNAL.
 	 * Some recent FreeBSD setups report broken pipes, and MSG_NOSIGNAL
@@ -1306,20 +1341,26 @@ static void create_processes(int argc, char **argv, FILE *pidfile)
 			send_log(NULL, LOG_INFO, "Master started\n");
 	}
 
-	/* Store PIDs of worker processes in oldpid so
-	 * they can be signaled later */
-	nb_oldpids = global.nbproc;
-        free(oldpids);
-	oldpids = malloc(nb_oldpids * sizeof(*oldpids));
-	if (!oldpids) {
-		send_log(NULL, LOG_ERR, "Cannot allocate memory "
-			 "for oldpids.\n");
-		protocol_unbind_all();
-		exit(1); /* there has been an error */
+	if (!replacing_workers) {
+		/* Store PIDs of worker processes in oldpid so
+		 * they can be signaled later */
+		nb_oldpids = 0;
+		nb_allocated_oldpids = global.nbproc;
+       	 	free(oldpids);
+		oldpids = calloc(nb_allocated_oldpids, sizeof(*oldpids));
+		if (!oldpids) {
+			send_log(NULL, LOG_ERR, "Cannot allocate memory "
+				 "for oldpids.\n");
+			protocol_unbind_all();
+			exit(1); /* there has been an error */
+		}
 	}
 
 	/* the father launches the required number of processes */
 	for (proc = 0; proc < global.nbproc; proc++) {
+		/* In the case of replacing_workers a worker may still exist */
+		if (oldpids[proc])
+			continue;
 		ret = fork();
 		if (ret < 0) {
 			send_log(NULL, LOG_ERR, "Cannot fork.\n");
@@ -1338,6 +1379,7 @@ static void create_processes(int argc, char **argv, FILE *pidfile)
 			break;
 		}
 		oldpids[proc] = ret;
+		nb_oldpids++;
 		relative_pid++; /* each child will get a different one */
 	}
 
@@ -1345,8 +1387,22 @@ static void create_processes(int argc, char **argv, FILE *pidfile)
 		if (!(global.mode & MODE_MASTER_WORKER))
 			/* The parent process is no longer needed */
 			exit(0);
-		else
-			is_master = 1;
+
+		is_master = 1;
+		if (!replace_workers_task) {
+			replace_workers_task = task_new();
+			if (unlikely(replace_workers_task == NULL)) {
+				send_log(NULL, LOG_ERR,
+					 "Cannot create reaper task.\n");
+				protocol_unbind_all();
+				exit(1); /* there has been an error */
+			}
+
+			replace_workers_task->process = task_replace_workers;
+			replace_workers_task->expire = TICK_ETERNITY;
+
+			signal_register_fct(SIGCHLD, sig_reaper, SIGCHLD);
+		}
 	}
 
 	/* we might have to unbind some proxies from some processes */
@@ -1382,17 +1438,25 @@ static void create_processes(int argc, char **argv, FILE *pidfile)
 	}
 
 	fork_poller();
+	replacing_workers = 0;
 }
 
 int main(int argc, char **argv)
 {
 	FILE *pidfile = NULL;
+	int mode = 0;
 
 	while (1) {
-		FILE *newpidfile = prepare(argc, argv);
-		if (!is_master)
-			pidfile = newpidfile;
-
+		if (!replacing_workers) {
+			FILE *newpidfile = prepare(argc, argv);
+			if (!is_master)
+				pidfile = newpidfile;
+			mode = global.mode & (MODE_QUIET|MODE_VERBOSE);
+		} else
+			/* Restore value of mode before it was
+			 * mangled by create_processes() */
+			global.mode = (global.mode &
+				       ~(MODE_QUIET|MODE_VERBOSE)) | mode;
 		create_processes(argc, argv, pidfile);
 
 		if (!is_master && !setid(argv[0])) {
@@ -1407,12 +1471,14 @@ int main(int argc, char **argv)
 		 */
 		run_poll_loop();
 
-		/* Free all Hash Keys and all Hash elements */
-		appsession_cleanup();
-		/* Do some cleanup */
-		deinit();
+		if (!replacing_workers) {
+			/* Free all Hash Keys and all Hash elements */
+			appsession_cleanup();
+			/* Do some cleanup */
+			deinit();
+		}
 
-		if (!restarting)
+		if (!restarting && !replacing_workers)
 			break;
 	}
 
