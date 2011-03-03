@@ -261,6 +261,17 @@ void usage(char *name)
 /*********************************************************************/
 
 /*
+ * upon SIGTERM, pass the same signal on to any children and exit
+ */
+void sig_term(struct sig_handler *sh)
+{
+	signal_unregister_handler(sh);
+	if (is_master)
+		kill(0, SIGTERM);
+	exit(0);
+}
+
+/*
  * upon SIGUSR1, let's have a soft stop. Note that soft_stop() broadcasts
  * a signal zero to all subscribers. This means that it's as easy as
  * subscribing to signal 0 to get informed about an imminent shutdown.
@@ -1038,6 +1049,7 @@ void run(int argc, char **argv)
 	if (global.mode & MODE_MASTER_WORKER)
 		signal_register_fct(SIGUSR2, sig_restart, SIGUSR2);
 	signal_register_fct(SIGHUP, sig_dump_state, SIGHUP);
+	signal_register_fct(SIGTERM, sig_term, SIGTERM);
 	signal_register_fct(SIGCHLD, sig_reaper, SIGCHLD);
 
 	/* Always catch SIGPIPE even on platforms which define MSG_NOSIGNAL.
