@@ -503,12 +503,16 @@ void init(int argc, char **argv)
 				arg_mode |= MODE_MASTER_WORKER;
 			else if (*flag == 'q')
 				arg_mode |= MODE_QUIET;
-			else if (*flag == 's' && (flag[1] == 'f' || flag[1] == 't')) {
-				/* list of pids to finish ('f') or terminate ('t') */
+			else if (*flag == 's' && (flag[1] == 'f' || flag[1] == 'r' || flag[1] == 't')) {
+				/* list of pids to finish ('f'),
+				 * reset ('r') or terminate ('t')
+				 */
 
 				if (flag[1] == 'f')
 					oldpids_sig = SIGUSR1; /* finish then exit */
-				else
+				else if (flag[1] == 'r')
+					oldpids_sig = SIGUSR2; /* restart */
+				else if (flag[1] == 't')
 					oldpids_sig = SIGTERM; /* terminate immediately */
 				argv++; argc--;
 
@@ -1044,6 +1048,13 @@ void run(int argc, char **argv)
 		global.mode = (global.mode &
 			~(MODE_DAEMON|MODE_MASTER_WORKER)) | mode;
 	close_log(); /* It will automatically be reopened as needed */
+
+	/* Signalling a reset can be handled here */
+	if (oldpids_sig == SIGUSR2) {
+		tell_old_pids(SIGUSR2);
+		return;
+	}
+
 	signal_register_fct(SIGQUIT, dump, SIGQUIT);
 	signal_register_fct(SIGUSR1, sig_soft_stop, SIGUSR1);
 	if (global.mode & MODE_MASTER_WORKER)
