@@ -979,6 +979,8 @@ static int tell_old_pids(int sig)
 void run_poll_loop()
 {
 	int next;
+	pid_t ppid = ((global.mode & MODE_MASTER_WORKER) && !is_master) ?
+			getppid() : -1;
 
 	tv_update_date(0,1);
 	while (1) {
@@ -999,6 +1001,12 @@ void run_poll_loop()
 		/* stop when there's nothing left to do */
 		if (jobs == 0)
 			break;
+
+		if (ppid > 0 && kill(ppid, 0)) {
+			send_log(NULL, LOG_INFO,
+				 "Parent disappeared, exiting.\n");
+			break;
+		}
 
 		if (is_master) {
 			sleep(1);
