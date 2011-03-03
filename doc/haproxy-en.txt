@@ -67,6 +67,7 @@ There are only a few command line options :
     -dp disables use of poll()
     -db disables background mode (stays in foreground, useful for debugging)
     -m <megs> enforces a memory usage limit to a maximum of <megs> megabytes.
+    -M master/worker mode
 
 The maximal number of connections per proxy instance is used as the default
 parameter for each instance for which the 'maxconn' paramter is not set in the
@@ -128,6 +129,7 @@ the following ones :
   - chroot <directory>
   - nbproc <number>
   - daemon
+  - master-worker
   - debug
   - nokqueue
   - nosepoll
@@ -266,13 +268,22 @@ Example :
 The service can start in several different modes :
   - foreground / background
   - quiet / normal / debug
+  - master-worker / non-master-worker
 
-The default mode is normal, foreground, which means that the program doesn't
-return once started. NEVER EVER use this mode in a system startup script, or
-the system won't boot. It needs to be started in background, so that it
-returns immediately after forking. That's accomplished by the 'daemon' option
-in the 'global' section, which is the equivalent of the '-D' command line
-argument.
+The default mode is normal, foreground, non-master-worker, which means that
+the program doesn't return once started. NEVER EVER use this mode in a
+system startup script, or the system won't boot. It needs to be started in
+background, so that it returns immediately after forking. That's
+accomplished by the 'daemon' option in the 'global' section, which is the
+equivalent of the '-D' command line argument.
+
+master-worker mode splits haproxy into two types of processes. A master
+process which binds to sockets and worker sockets which run proxies. When
+running in this mode haproxy a master process will restart on receipt of a
+SIGUSR2. On restart configuration files will be reread, existing workers
+killed and new workers started.
+
+master-worker may be compined with daemon.
 
 The '-db' command line argument overrides the 'daemon' and 'nbproc' global
 options to make the process run in normal, foreground mode.
@@ -295,9 +306,10 @@ eventhough the load needed to saturate a recent processor is far above common
 usage. Anyway, for very specific needs, the proxy can start several processes
 between which the operating system will spread the incoming connections. The
 number of processes is controlled by the 'nbproc' parameter in the 'global'
-section. It defaults to 1, and obviously works only in 'daemon' mode. One
-typical usage of this parameter has been to workaround the default per-process
-file-descriptor limit that Solaris imposes to user processes.
+section. It defaults to 1, and works only if 'daemon' or 'master-worker' mode
+is selected.  One typical usage of this parameter has been to workaround
+the default per-process file-descriptor limit that Solaris imposes to user
+processes.
 
 Example :
 ---------
@@ -312,10 +324,11 @@ Example :
 -------------------------------
 Haproxy now supports the notion of pidfile. If the '-p' command line argument,
 or the 'pidfile' global option is followed with a file name, this file will be
-removed, then filled with all children's pids, one per line (only in daemon
-mode). This file is NOT within the chroot, which allows to work with a readonly
- chroot. It will be owned by the user starting the process, and will have
-permissions 0644.
+removed, then filled with all children's pids, one per line (only if daemon
+or master-worker mode is selected). This file is NOT within the chroot,
+which allows to work with a readonly chroot. It will be owned by the user
+starting the process, and will have permissions 0644. In master-worker mode
+the first pid in the pidfile will be that of the master.
 
 Example :
 ---------
@@ -612,6 +625,14 @@ be useful to save the pidfile before starting a new instance.
 
 This mechanism fully exploited since 1.2.11 with the '-st' and '-sf' options
 (see below).
+
+As of version 1.XXX a restart mechanism has been introduced. When running
+in master/worker mode if the master recieves a SIGUSR2 then it re-reads the
+configuration file, sends a SIGUSR1 to workers to gracefully shut them down
+and starts new workers. Soft-stopping workers is currently not supported on
+restart.
+
+If a worker recieves a SIGUSR2 it is ignored.
 
 2.4.1) Hot reconfiguration
 --------------------------

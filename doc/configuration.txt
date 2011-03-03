@@ -432,6 +432,7 @@ The following keywords are supported in the "global" section :
  * Process management and security
    - chroot
    - daemon
+   - master-worker
    - gid
    - group
    - log
@@ -486,10 +487,25 @@ daemon
   operation. It is equivalent to the command line "-D" argument. It can be
   disabled by the command line "-db" argument.
 
+master-worker
+  Split haproxy into two types of processes. A master process which
+  binds to sockets and worker sockets which run proxies. When running
+  in this mode haproxy will restart rather than exiting when
+  haproxy -st is used. On restart configuration files will be reread.
+
+  On linux the master process will run with CAP_NET_BIND_SERVCE and
+  CAP_SYS_RESOURCE so that even if is running as non-root it will be able
+  to bind to privilaged ports and update ulimits.
+
 gid <number>
   Changes the process' group ID to <number>. It is recommended that the group
   ID is dedicated to HAProxy or to a small set of similar daemons. HAProxy must
   be started with a user belonging to this group, or with superuser privileges.
+
+  If running in master-worker mode changes to the gid are ignored if
+  haproxy is already runing as non-root, either because it was started as
+  non-root or it switched to another user when originally started.
+
   See also "group" and "uid".
 
 group <group name>
@@ -546,16 +562,20 @@ log-tag <string>
   running on the same host.
 
 nbproc <number>
-  Creates <number> processes when going daemon. This requires the "daemon"
-  mode. By default, only one process is created, which is the recommended mode
-  of operation. For systems limited to small sets of file descriptors per
-  process, it may be needed to fork multiple daemons. USING MULTIPLE PROCESSES
-  IS HARDER TO DEBUG AND IS REALLY DISCOURAGED. See also "daemon".
+  Creates <number> processes when going daemon. This requires "daemon" or
+  "master-worker" mode. By default, only one process is created, which is
+  the recommended mode of operation. For systems limited to small sets of
+  file descriptors per process, it may be needed to fork multiple daemons.
+  USING MULTIPLE PROCESSES IS HARDER TO DEBUG AND IS REALLY DISCOURAGED.
+  See also "daemon".
 
 pidfile <pidfile>
   Writes pids of all daemons into file <pidfile>. This option is equivalent to
   the "-p" command line argument. The file must be accessible to the user
   starting the process. See also "daemon".
+
+  If both "daemon" and "master-worker" mode is set then the pid
+  of the master process will be the first entry in <pid file>.
 
 stats socket <path> [{uid | user} <uid>] [{gid | group} <gid>] [mode <mode>]
   [level <level>]
@@ -599,7 +619,13 @@ uid <number>
   Changes the process' user ID to <number>. It is recommended that the user ID
   is dedicated to HAProxy or to a small set of similar daemons. HAProxy must
   be started with superuser privileges in order to be able to switch to another
-  one. See also "gid" and "user".
+  one.
+
+  If running in master-worker mode changes to the uid are ignored if
+  haproxy is already runing as non-root, either because it was started as
+  non-root or it switched to another user when originally started.
+
+  See also "gid" and "user".
 
 ulimit-n <number>
   Sets the maximum number of per-process file-descriptors to <number>. By
@@ -620,9 +646,16 @@ unix-bind [ prefix <prefix> ] [ mode <mode> ] [ user <user> ] [ uid <uid> ]
   both are specified, the "bind" statement has priority, meaning that the
   "unix-bind" settings may be seen as process-wide default settings.
 
+  If running in master-worker mode and in a chroot any failure to resolve
+  the user or group on restart will be ignored and the previous settings
+  will prevail.
+
 user <user name>
   Similar to "uid" but uses the UID of user name <user name> from /etc/passwd.
   See also "uid" and "group".
+
+  If running in master-worker mode and in a chroot any failure to resolve
+  the user will be ignored and the previous settings will prevail.
 
 node <name>
   Only letters, digits, hyphen and underscore are allowed, like in DNS names.
@@ -794,6 +827,9 @@ group <groupname> [users <user>,<user>,(...)]
   Adds group <groupname> to the current userlist. It is also possible to
   attach users to this group by using a comma separated list of names
   proceeded by "users" keyword.
+
+  If running in master-worker mode and in a chroot any failure to resolve
+  the group will be ignored and the previous settings will prevail.
 
 user <username> [password|insecure-password <password>]
                 [groups <group>,<group>,(...)]

@@ -6,7 +6,7 @@ HAProxy \- fast and reliable http reverse proxy and load balancer
 
 .SH SYNOPSIS
 
-haproxy \-f <configuration\ file> [\-n\ maxconn] [\-N\ maxconn] [\-d] [\-D] [\-q] [\-V] [\-c] [\-p\ <pidfile>] [\-s] [\-l] [\-dk] [\-ds] [\-de] [\-dp] [\-db] [\-m\ <megs>] [{\-sf|\-st}\ pidlist...] 
+haproxy \-f <configuration\ file> [\-n\ maxconn] [\-N\ maxconn] [\-d] [\-D] [\-q] [\-V] [\-c] [\-p\ <pidfile>] [\-s] [\-l] [\-dk] [\-ds] [\-de] [\-dp] [\-db] [\-m\ <megs>] [{\-sf|\-sr|\-st}\ pidlist...]
 
 .SH DESCRIPTION
 
@@ -116,11 +116,22 @@ run full debug.
 Enforce a memory usage limit to a maximum of <megs> megabytes.
 
 .TP
+\fB\-M\fP
+Use master/worker mode. This may be compined with daemon mode.
+
+.TP
 \fB\-sf <pidlist>\fP
 Send FINISH signal to the pids in pidlist after startup. The processes
 which receive this signal will wait for all sessions to finish before
 exiting. This option must be specified last, followed by any number of
 PIDs. Technically speaking, \fBSIGTTOU\fP and \fBSIGUSR1\fP are sent.
+
+.TP
+\fB\-sr <pidlist>\fP
+Send RELOAD signal. If received by a master process it will re-read the
+configuration, signal its workers using the procedure described for
+\fB\-sf\fP and if that is successful start new workers. If received by a
+worker it is ignored.
 
 .TP
 \fB\-st <pidlist>\fP
@@ -143,9 +154,14 @@ Some signals have a special meaning for the haproxy daemon. Generally, they are 
 .TP
 \- \fBSIGUSR1\fP
 Tells the daemon to stop all proxies and exit once all sessions are closed. It is often referred to as the "soft-stop" signal.
+Used internally by \sB-sr\fP.
+
+\- \fBSIGUSR2\fP
+In master/worker mode the master will perform a restart. Ignored by workers.
 .TP
 \- \fBSIGTTOU\fP
-Tells the daemon to stop listening to all sockets. Used internally by \fB\-sf\fP and \fB\-st\fP.
+Tells the daemon to stop listening to all sockets.
+Used internally by \fB\-sf\fP, \fB\-st\fP.
 .TP
 \- \fBSIGTTIN\fP
 Tells the daemon to restart listening to all sockets after a \fBSIGTTOU\fP. Used internally when there was a problem during hot reconfiguration.
