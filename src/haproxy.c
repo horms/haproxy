@@ -156,6 +156,7 @@ char trash[BUFSIZE];
 char *swap_buffer = NULL;
 
 int nb_oldpids = 0;
+int nb_allocated_oldpids = 0;
 const int zero = 0;
 const int one = 1;
 const struct linger nolinger = { .l_onoff = 1, .l_linger = 0 };
@@ -319,8 +320,20 @@ void sig_listen(struct sig_handler *sh)
  */
 void sig_reaper(struct sig_handler *sh)
 {
-	int status;
-	while(waitpid(-1, &status, WNOHANG) > 0);
+	int status, p;
+	pid_t pid;
+
+	while(1) {
+		pid = waitpid(-1, &status, WNOHANG);
+		if (pid <= 0)
+			break;
+		for (p = 0; p < nb_allocated_oldpids; p++)
+			if (oldpids[p] == pid) {
+				oldpids[p] = 0;
+				nb_oldpids--;
+				break;
+			}
+	}
 }
 
 /*
@@ -527,6 +540,7 @@ void init(int argc, char **argv)
 						argc--; argv++;
 						nb_oldpids++;
 					}
+					nb_allocated_oldpids = nb_oldpids;
 				}
 			}
 			else { /* >=2 args */
@@ -965,8 +979,8 @@ static int tell_old_pids(int sig)
 {
 	int p;
 	int ret = 0;
-	for (p = 0; p < nb_oldpids; p++)
-		if (kill(oldpids[p], sig) == 0)
+	for (p = 0; p < nb_allocated_oldpids; p++)
+		if (oldpids[p] && kill(oldpids[p], sig) == 0)
 			ret++;
 	return ret;
 }
