@@ -400,6 +400,8 @@ void init(int argc, char **argv)
 	error_snapshot_id = 0;
 	jobs = 0;
 
+	socket_cache_make_all_available();
+
 	/* NB: POSIX does not make it mandatory for gethostname() to NULL-terminate
 	 * the string in case of truncation, and at least FreeBSD appears not to do
 	 * it.
@@ -1042,12 +1044,12 @@ static int setid(const char *name)
 	return 1;
 }
 
-void run(int argc, char **argv)
+static FILE *prepare(int argc, char **argv)
 {
 	int err, retry;
 	int mode = global.mode & (MODE_DAEMON|MODE_MASTER_WORKER);
 	struct rlimit limit;
-	static FILE *pidfile = NULL;
+	FILE *pidfile = NULL;
 	char errmsg[100];
 
 	init(argc, argv);
@@ -1060,7 +1062,7 @@ void run(int argc, char **argv)
 	/* Signalling a reset can be handled here */
 	if (oldpids_sig == SIGUSR2) {
 		tell_old_pids(SIGUSR2);
-		return;
+		exit(0);
 	}
 
 	signal_register_fct(SIGQUIT, dump, SIGQUIT);
@@ -1254,6 +1256,12 @@ void run(int argc, char **argv)
 
 	socket_cache_gc();
 
+	return pidfile;
+}
+
+static void run(int argc, char **argv, FILE *pidfile)
+{
+
 	if (global.mode & (MODE_DAEMON|MODE_MASTER_WORKER)) {
 		struct proxy *px;
 		int ret = 0;
@@ -1283,13 +1291,11 @@ void run(int argc, char **argv)
 				send_log(NULL, LOG_INFO, "Master started\n");
 		}
 
-		if (pidfile != NULL) {
-			rewind(pidfile);
-			ftruncate(fileno(pidfile), 0);
-			if (global.mode & MODE_MASTER_WORKER) {
-				fprintf(pidfile, "%d\n", pid);
-				fflush(pidfile);
-			}
+		rewind(pidfile);
+		ftruncate(fileno(pidfile), 0);
+		if (global.mode & MODE_MASTER_WORKER) {
+			fprintf(pidfile, "%d\n", pid);
+			fflush(pidfile);
 		}
 
 		/* Store PIDs of worker processes in oldpid so
@@ -1323,10 +1329,8 @@ void run(int argc, char **argv)
 					         "Worker #%d started\n", proc);
 				break;
 			}
-			if (pidfile != NULL) {
-				fprintf(pidfile, "%d\n", ret);
-				fflush(pidfile);
-			}
+			fprintf(pidfile, "%d\n", ret);
+			fflush(pidfile);
 			oldpids[proc] = ret;
 			relative_pid++; /* each child will get a different one */
 		}
@@ -1389,8 +1393,14 @@ void run(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
+	FILE *pidfile = NULL;
+
 	while (1) {
-		run(argc, argv);
+		FILE *newpidfile = prepare(argc, argv);
+		if (!is_master)
+			pidfile = newpidfile;
+
+		run(argc, argv, pidfile);
 		if (!restarting)
 			break;
 	}
