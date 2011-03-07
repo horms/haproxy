@@ -1259,136 +1259,114 @@ static FILE *prepare(int argc, char **argv)
 	return pidfile;
 }
 
-static void run(int argc, char **argv, FILE *pidfile)
+static void create_processes(int argc, char **argv, FILE *pidfile)
 {
+	struct proxy *px;
+	int ret = 0;
+	int proc;
 
-	if (global.mode & (MODE_DAEMON|MODE_MASTER_WORKER)) {
-		struct proxy *px;
-		int ret = 0;
-		int proc;
+	if (!(global.mode & (MODE_DAEMON|MODE_MASTER_WORKER)))
+		return;
 
-		/* Create master if it doesn't already exist,
-		 * is needed and is to be detached
-		 */
-		if (!is_master && global.mode & MODE_MASTER_WORKER) {
-			if (global.mode & MODE_DAEMON) {
-				ret = fork();
-				if (ret < 0) {
-					Alert("[%s.run()] Cannot fork.\n",
-					      argv[0]);
-					protocol_unbind_all();
-					exit(1); /* there has been an error */
-				}
-				if (ret > 0)
-					exit(0); /* Exit original process */
-
-				/* Child */
-				setsid();
-				close_log();
-				pid = getpid();
-			}
-			if (!(global.mode & MODE_QUIET))
-				send_log(NULL, LOG_INFO, "Master started\n");
-		}
-
-		rewind(pidfile);
-		ftruncate(fileno(pidfile), 0);
-		if (global.mode & MODE_MASTER_WORKER) {
-			fprintf(pidfile, "%d\n", pid);
-			fflush(pidfile);
-		}
-
-		/* Store PIDs of worker processes in oldpid so
-		 * they can be signaled later */
-		nb_oldpids = global.nbproc;
-	        free(oldpids);
-		oldpids = malloc(nb_oldpids * sizeof(*oldpids));
-		if (!oldpids) {
-			send_log(NULL, LOG_ERR, "Cannot allocate memory "
-				 "for oldpids.\n");
-			protocol_unbind_all();
-			exit(1); /* there has been an error */
-		}
-
-		/* the father launches the required number of processes */
-		for (proc = 0; proc < global.nbproc; proc++) {
+	/* Create master if it doesn't already exist,
+	 * is needed and is to be detached
+	 */
+	if (!is_master && global.mode & MODE_MASTER_WORKER) {
+		if (global.mode & MODE_DAEMON) {
 			ret = fork();
 			if (ret < 0) {
-				send_log(NULL, LOG_ERR, "Cannot fork.\n");
+				Alert("[%s.run()] Cannot fork.\n",
+				      argv[0]);
 				protocol_unbind_all();
 				exit(1); /* there has been an error */
 			}
-			else if (ret == 0) { /* child breaks here */
-				if (!(global.mode & MODE_MASTER_WORKER))
-					setsid();
-				is_master = 0;
-				close_log();
-				pid = getpid();
-				if (!(global.mode & MODE_QUIET))
-					send_log(NULL, LOG_INFO,
-					         "Worker #%d started\n", proc);
-				break;
-			}
-			fprintf(pidfile, "%d\n", ret);
-			fflush(pidfile);
-			oldpids[proc] = ret;
-			relative_pid++; /* each child will get a different one */
+			if (ret > 0)
+				exit(0); /* Exit original process */
+
+			/* Child */
+			setsid();
+			close_log();
+			pid = getpid();
 		}
-		/* close the pidfile both in children and father */
-		if (pidfile != NULL)
-			fclose(pidfile);
-
-		/* We won't ever use this anymore */
-		free(oldpids);        oldpids = NULL;
-
-		if (proc == global.nbproc) {
-			if (!(global.mode & MODE_MASTER_WORKER))
-				/* The parent process is no longer needed */
-				exit(0);
-			else
-				is_master = 1;
-		}
-
-		/* we might have to unbind some proxies from some processes */
-		px = proxy;
-		while (px != NULL) {
-			if (px->bind_proc && px->state != PR_STSTOPPED) {
-				if (px->bind_proc & (1 << proc))
-					stop_proxy(px);
-			}
-			px = px->next;
-		}
-
-		/* if we're NOT in QUIET mode, we should now close the 3 first FDs to ensure
-		 * that we can detach from the TTY. We MUST NOT do it in other cases since
-		 * it would have already be done, and 0-2 would have been affected to listening
-		 * sockets
-		 */
-		if (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE)) {
-			/* detach from the tty */
-			fclose(stdin); fclose(stdout); fclose(stderr);
-			global.mode &= ~MODE_VERBOSE;
-			global.mode |= MODE_QUIET; /* ensure that we won't say anything from now */
-		}
-
-		fork_poller();
+		if (!(global.mode & MODE_QUIET))
+			send_log(NULL, LOG_INFO, "Master started\n");
 	}
 
-	if (!is_master && !setid(argv[0])) {
+	rewind(pidfile);
+	ftruncate(fileno(pidfile), 0);
+	if (global.mode & MODE_MASTER_WORKER) {
+		fprintf(pidfile, "%d\n", pid);
+		fflush(pidfile);
+	}
+
+	/* Store PIDs of worker processes in oldpid so
+	 * they can be signaled later */
+	nb_oldpids = global.nbproc;
+        free(oldpids);
+	oldpids = malloc(nb_oldpids * sizeof(*oldpids));
+	if (!oldpids) {
+		send_log(NULL, LOG_ERR, "Cannot allocate memory "
+			 "for oldpids.\n");
 		protocol_unbind_all();
-		exit(1);
+		exit(1); /* there has been an error */
 	}
 
-	protocol_enable_all();
-	/*
-	 * That's it : the central polling loop. Run until we stop.
-	 */
-	run_poll_loop();
+	/* the father launches the required number of processes */
+	for (proc = 0; proc < global.nbproc; proc++) {
+		ret = fork();
+		if (ret < 0) {
+			send_log(NULL, LOG_ERR, "Cannot fork.\n");
+			protocol_unbind_all();
+			exit(1); /* there has been an error */
+		}
+		else if (ret == 0) { /* child breaks here */
+			if (!(global.mode & MODE_MASTER_WORKER))
+				setsid();
+			is_master = 0;
+			close_log();
+			pid = getpid();
+			if (!(global.mode & MODE_QUIET))
+				send_log(NULL, LOG_INFO,
+				         "Worker #%d started\n", proc);
+			break;
+		}
+		fprintf(pidfile, "%d\n", ret);
+		fflush(pidfile);
+		oldpids[proc] = ret;
+		relative_pid++; /* each child will get a different one */
+	}
 
-	/* Free all Hash Keys and all Hash elements */
-	appsession_cleanup();
-	/* Do some cleanup */ 
-	deinit();
+	if (proc == global.nbproc) {
+		if (!(global.mode & MODE_MASTER_WORKER))
+			/* The parent process is no longer needed */
+			exit(0);
+		else
+			is_master = 1;
+	}
+
+	/* we might have to unbind some proxies from some processes */
+	px = proxy;
+	while (px != NULL) {
+		if (px->bind_proc && px->state != PR_STSTOPPED) {
+			if (px->bind_proc & (1 << proc))
+				stop_proxy(px);
+		}
+		px = px->next;
+	}
+
+	/* if we're NOT in QUIET mode, we should now close the 3 first FDs to ensure
+	 * that we can detach from the TTY. We MUST NOT do it in other cases since
+	 * it would have already be done, and 0-2 would have been affected to listening
+	 * sockets
+	 */
+	if (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE)) {
+		/* detach from the tty */
+		fclose(stdin); fclose(stdout); fclose(stderr);
+		global.mode &= ~MODE_VERBOSE;
+		global.mode |= MODE_QUIET; /* ensure that we won't say anything from now */
+	}
+
+	fork_poller();
 }
 
 int main(int argc, char **argv)
@@ -1400,7 +1378,25 @@ int main(int argc, char **argv)
 		if (!is_master)
 			pidfile = newpidfile;
 
-		run(argc, argv, pidfile);
+		create_processes(argc, argv, pidfile);
+
+		if (!is_master && !setid(argv[0])) {
+			protocol_unbind_all();
+			exit(1);
+		}
+
+		protocol_enable_all();
+
+		/*
+		 * That's it : the central polling loop. Run until we stop.
+		 */
+		run_poll_loop();
+
+		/* Free all Hash Keys and all Hash elements */
+		appsession_cleanup();
+		/* Do some cleanup */
+		deinit();
+
 		if (!restarting)
 			break;
 	}
