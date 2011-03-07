@@ -1292,13 +1292,6 @@ static void create_processes(int argc, char **argv, FILE *pidfile)
 			send_log(NULL, LOG_INFO, "Master started\n");
 	}
 
-	rewind(pidfile);
-	ftruncate(fileno(pidfile), 0);
-	if (global.mode & MODE_MASTER_WORKER) {
-		fprintf(pidfile, "%d\n", pid);
-		fflush(pidfile);
-	}
-
 	/* Store PIDs of worker processes in oldpid so
 	 * they can be signaled later */
 	nb_oldpids = global.nbproc;
@@ -1330,8 +1323,6 @@ static void create_processes(int argc, char **argv, FILE *pidfile)
 				         "Worker #%d started\n", proc);
 			break;
 		}
-		fprintf(pidfile, "%d\n", ret);
-		fflush(pidfile);
 		oldpids[proc] = ret;
 		relative_pid++; /* each child will get a different one */
 	}
@@ -1364,6 +1355,16 @@ static void create_processes(int argc, char **argv, FILE *pidfile)
 		fclose(stdin); fclose(stdout); fclose(stderr);
 		global.mode &= ~MODE_VERBOSE;
 		global.mode |= MODE_QUIET; /* ensure that we won't say anything from now */
+	}
+
+	if (pidfile && (is_master || !(global.mode & MODE_MASTER_WORKER))) {
+		rewind(pidfile);
+		ftruncate(fileno(pidfile), 0);
+		if (is_master)
+			fprintf(pidfile, "%d\n", pid);
+		for (proc = 0; proc < nb_oldpids; proc++)
+			fprintf(pidfile, "%d\n", oldpids[proc]);
+		fflush(pidfile);
 	}
 
 	fork_poller();
