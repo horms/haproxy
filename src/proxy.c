@@ -575,9 +575,10 @@ void soft_stop(void)
 	tv_update_date(0,1); /* else, the old time before select will be used */
 	while (p) {
 		if (p->state != PR_STSTOPPED) {
-			Warning("Stopping %s %s in %d ms.\n", proxy_cap_str(p->cap), p->id, p->grace);
-			send_log(p, LOG_WARNING, "Stopping %s %s in %d ms.\n", proxy_cap_str(p->cap), p->id, p->grace);
-			p->stop_time = tick_add(now_ms, p->grace);
+			int grace = is_master ? 0 : p->grace;
+			Warning("Stopping %s %s in %d ms.\n", proxy_cap_str(p->cap), p->id, grace);
+			send_log(p, LOG_WARNING, "Stopping %s %s in %d ms.\n", proxy_cap_str(p->cap), p->id, grace);
+			p->stop_time = tick_add(now_ms, grace);
 		}
 		if (p->table.size && p->table.sync_task)
 			 task_wakeup(p->table.sync_task, TASK_WOKEN_MSG);
