@@ -133,6 +133,7 @@ struct global global_default = {
 /*********************************************************************/
 
 int stopping;	/* non zero means stopping in progress */
+int restarting;	/* non zero means restart in progress */
 int is_master = 0;	/* non zero means that master/worker mode
 			 * has been activated and the current process
 			 * is the master */
@@ -272,6 +273,20 @@ void sig_soft_stop(struct sig_handler *sh)
 }
 
 /*
+ * upon SIGUSR2, restart master. Ignored by workers
+ */
+void sig_restart(struct sig_handler *sh)
+{
+	if (!is_master)
+		return;
+
+	restarting = 1;
+	soft_stop();
+	signal_unregister_handler(sh);
+	pool_gc2();
+}
+
+/*
  * upon SIGTTOU, we pause everything
  */
 void sig_pause(struct sig_handler *sh)
@@ -387,7 +402,7 @@ void init(int argc, char **argv)
 	 * Initialize the previously static variables.
 	 */
     
-	totalconn = actconn = maxfd = listeners = stopping = 0;
+	totalconn = actconn = maxfd = listeners = stopping = restarting = 0;
     
 
 #ifdef HAPROXY_MEMMAX
@@ -1343,7 +1358,18 @@ void run(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
-	run(argc, argv);
+	while (1) {
+		run(argc, argv);
+		if (!restarting)
+			break;
+	}
+
+	if (is_master)
+		/* The master is gracefully shutting down,
+		 * ask the clients to gracefully shutdown too.
+		 */
+		tell_old_pids(SIGUSR1);
+
 	exit(0);
 }
 
