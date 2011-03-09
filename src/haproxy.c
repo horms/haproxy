@@ -132,6 +132,9 @@ struct global global = {
 /*********************************************************************/
 
 int stopping;	/* non zero means stopping in progress */
+int is_master = 0;	/* non zero means that master/worker mode
+			 * has been activated and the current process
+			 * is the master */
 int jobs = 0;   /* number of active jobs (conns, listeners, active tasks, ...) */
 
 /* Here we store informations about the pids of the processes we may pause
