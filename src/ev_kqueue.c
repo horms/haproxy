@@ -210,7 +210,6 @@ REGPRM1 static void _do_term(struct poller *p)
 	}
 
 	p->private = NULL;
-	p->pref = 0;
 }
 
 /*

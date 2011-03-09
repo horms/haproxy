@@ -212,7 +212,6 @@ REGPRM1 static void _do_term(struct poller *p)
 	free(fd_evts[DIR_RD]);
 	free(poll_events);
 	p->private = NULL;
-	p->pref = 0;
 }
 
 /*

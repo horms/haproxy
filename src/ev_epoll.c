@@ -336,13 +336,13 @@ REGPRM1 static void _do_term(struct poller *p)
 		epoll_fd = -1;
 	}
 
+	nbchanges = 0;
 	chg_ptr = NULL;
 	chg_list = NULL;
 	fd_evts = NULL;
 	epoll_events = NULL;
 
 	p->private = NULL;
-	p->pref = 0;
 }
 
 /*

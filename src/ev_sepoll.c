@@ -587,11 +587,13 @@ REGPRM1 static void _do_term(struct poller *p)
 		epoll_fd = -1;
 	}
 
+	nbspec = 0;
+	absmaxevents = 0;
+	fd_created = 0;
 	spec_list = NULL;
 	epoll_events = NULL;
 
 	p->private = NULL;
-	p->pref = 0;
 }
 
 /*
