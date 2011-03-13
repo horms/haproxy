@@ -703,9 +703,12 @@ void init(int argc, char **argv)
 				    MODE_VERBOSE | MODE_DEBUG |
 				    MODE_MASTER_WORKER));
 
-	if ((global.mode & MODE_DEBUG) && (global.mode & (MODE_DAEMON | MODE_QUIET))) {
-		Warning("<debug> mode incompatible with <quiet> and <daemon>. Keeping <debug> only.\n");
-		global.mode &= ~(MODE_DAEMON | MODE_QUIET);
+	if ((global.mode & MODE_DEBUG) &&
+	    (global.mode & (MODE_DAEMON | MODE_MASTER_WORKER | MODE_QUIET))) {
+		Warning("<debug> mode incompatible with <daemon>, "
+			"<master-worker> and <daemon>. "
+			"Keeping <debug> only.\n");
+		global.mode &= ~(MODE_DAEMON | MODE_MASTER_WORKER | MODE_QUIET);
 	}
 
 	if ((global.nbproc > 1) &&
