@@ -281,7 +281,8 @@ void sig_term(struct sig_handler *sh)
 void sig_soft_stop(struct sig_handler *sh)
 {
 	soft_stop();
-	signal_unregister_handler(sh);
+	if (sh)
+		signal_unregister_handler(sh);
 	pool_gc2();
 }
 
@@ -409,6 +410,25 @@ void dump(struct sig_handler *sh)
 	/* dump memory usage then free everything possible */
 	dump_pools();
 	pool_gc2();
+}
+
+static struct task *ping_master_task = NULL;
+pid_t ppid;
+
+struct task *task_ping_master(struct task *t)
+{
+	/* Ignore EPERM as this will occur when running in master/worker
+	 * mode if setid() has run successfully on worker processes -
+	 * the master will still be privileged
+	 */
+	if (kill(ppid, 0) && errno != EPERM) {
+		send_log(NULL, LOG_INFO, "Parent disappeared, exiting.\n");
+		sig_soft_stop(NULL);
+		t->expire = TICK_ETERNITY;
+	} else 
+		ping_master_task->expire = tick_add_ifset(now_ms, 1000);
+
+	return t;
 }
 
 /*
@@ -1029,8 +1049,6 @@ int worker_missing()
 void run_poll_loop()
 {
 	int next;
-	pid_t ppid = ((global.mode & MODE_MASTER_WORKER) && !is_master) ?
-			getppid() : -1;
 
 	tv_update_date(0,1);
 	while (1) {
@@ -1051,12 +1069,6 @@ void run_poll_loop()
 		/* stop when there's nothing left to do */
 		if (jobs == 0)
 			break;
-
-		if (ppid > 0 && kill(ppid, 0)) {
-			send_log(NULL, LOG_INFO,
-				 "Parent disappeared, exiting.\n");
-			break;
-		}
 
 		if (replacing_workers) {
 			send_log(NULL, LOG_INFO,
@@ -1396,13 +1408,20 @@ static void create_processes(int argc, char **argv, FILE *pidfile)
 			signal_register_fct(SIGCHLD, sig_reaper, SIGCHLD);
 		}
 	} else { /* Child */
-		if (!(global.mode & MODE_MASTER_WORKER))
-			setsid();
 		is_master = 0;
 		close_log();
 		pid = getpid();
 		if (!(global.mode & MODE_QUIET))
 			send_log(NULL, LOG_INFO, "Worker #%d started\n", proc);
+		if (!(global.mode & MODE_MASTER_WORKER))
+			setsid();
+		else {
+			ppid = getppid();
+			ping_master_task = task_new();
+			ping_master_task->process = task_ping_master;
+			ping_master_task->expire = tick_add_ifset(now_ms, 1000);
+			task_queue(ping_master_task);
+		}
 	}
 
 	/* we might have to unbind some proxies from some processes */
