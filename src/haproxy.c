@@ -1370,23 +1370,15 @@ static void create_processes(int argc, char **argv, FILE *pidfile)
 			protocol_unbind_all();
 			exit(1); /* there has been an error */
 		}
-		else if (ret == 0) { /* child breaks here */
-			if (!(global.mode & MODE_MASTER_WORKER))
-				setsid();
-			is_master = 0;
-			close_log();
-			pid = getpid();
-			if (!(global.mode & MODE_QUIET))
-				send_log(NULL, LOG_INFO,
-				         "Worker #%d started\n", proc);
+		else if (ret == 0) /* Child */
 			break;
-		}
+		/* Parent */
 		oldpids[proc] = ret;
 		nb_oldpids++;
 		relative_pid++; /* each child will get a different one */
 	}
 
-	if (proc == global.nbproc) {
+	if (proc == global.nbproc) { /* Parent */
 		if (!(global.mode & MODE_MASTER_WORKER))
 			/* The parent process is no longer needed */
 			exit(0);
@@ -1406,6 +1398,14 @@ static void create_processes(int argc, char **argv, FILE *pidfile)
 
 			signal_register_fct(SIGCHLD, sig_reaper, SIGCHLD);
 		}
+	} else { /* Child */
+		if (!(global.mode & MODE_MASTER_WORKER))
+			setsid();
+		is_master = 0;
+		close_log();
+		pid = getpid();
+		if (!(global.mode & MODE_QUIET))
+			send_log(NULL, LOG_INFO, "Worker #%d started\n", proc);
 	}
 
 	/* we might have to unbind some proxies from some processes */
