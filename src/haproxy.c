@@ -292,11 +292,8 @@ void sig_restart(struct sig_handler *sh)
 {
 	if (!is_master)
 		return;
-
 	restarting = 1;
-	soft_stop();
-	signal_unregister_handler(sh);
-	pool_gc2();
+	sig_soft_stop(sh);
 }
 
 /*
