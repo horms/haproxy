@@ -1469,6 +1469,16 @@ static void create_processes(int argc, char **argv, FILE *pidfile)
 	replacing_workers = 0;
 }
 
+static void post(const char *name)
+{
+	if (!is_master && !setid(argv[0])) {
+		protocol_unbind_all();
+		exit(1);
+	}
+
+	protocol_enable_all();
+}
+
 int main(int argc, char **argv)
 {
 	FILE *pidfile = NULL;
@@ -1486,13 +1496,7 @@ int main(int argc, char **argv)
 			global.mode = (global.mode &
 				       ~(MODE_QUIET|MODE_VERBOSE)) | mode;
 		create_processes(argc, argv, pidfile);
-
-		if (!is_master && !setid(argv[0])) {
-			protocol_unbind_all();
-			exit(1);
-		}
-
-		protocol_enable_all();
+		post(argv[0]);
 
 		/*
 		 * That's it : the central polling loop. Run until we stop.
