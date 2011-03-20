@@ -1106,6 +1106,23 @@ static int setid(const char *name)
 	return 1;
 }
 
+static void enter_chroot(const char *name)
+{
+	if (global.chroot == NULL)
+		return;
+
+	if (chroot(global.chroot) == -1) {
+		Alert("[%s.enter_chroot()] Cannot chroot(%s).\n",
+		      name, global.chroot);
+		if (nb_oldpids)
+			tell_old_pids(SIGTTIN);
+		protocol_unbind_all();
+		exit(1);
+	}
+	chdir("/");
+	free(global.chroot);  global.chroot = NULL;
+}
+
 static FILE *prepare(int argc, char **argv)
 {
 	int err, retry;
@@ -1288,17 +1305,13 @@ static FILE *prepare(int argc, char **argv)
 			" might not work well.\n"
 			"", argv[0]);
 
-	/* chroot if needed */
-	if (global.chroot != NULL) {
-		if (chroot(global.chroot) == -1) {
-			Alert("[%s.run()] Cannot chroot(%s).\n", argv[0], global.chroot);
-			if (nb_oldpids)
-				tell_old_pids(SIGTTIN);
-			protocol_unbind_all();
-			exit(1);
-		}
-		chdir("/");
-	}
+	/* If master/worker mode is not set then enter the chroot now
+	 * so that an error when doing so will be recoverable from
+	 * a soft-restart point of view. Soft-restart is not implemented
+	 * for  master/worker mode.
+	 */
+	if (!(global.mode & MODE_MASTER_WORKER))
+		enter_chroot(argv[0]);
 
 	if (nb_oldpids)
 		nb_oldpids = tell_old_pids(oldpids_sig);
@@ -1469,11 +1482,22 @@ static void create_processes(int argc, char **argv, FILE *pidfile)
 	replacing_workers = 0;
 }
 
+/* chroot, change uid and enable all protocols */
 static void post(const char *name)
 {
-	if (!is_master && !setid(argv[0])) {
-		protocol_unbind_all();
-		exit(1);
+	if (!is_master) {
+		/* In master/worker mode the master is kept out
+		 * of the chroot. Thus the chroot needs to be entered
+	         * by children after they are forked. That is, later
+		 * thank is possible when master/worker mode is not enabled
+		 */
+		if (global.mode & MODE_MASTER_WORKER)
+			enter_chroot(name);
+
+		if (!setid(name)) {
+			protocol_unbind_all();
+			exit(1);
+		}
 	}
 
 	protocol_enable_all();
