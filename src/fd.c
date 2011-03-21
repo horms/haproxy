@@ -234,22 +234,60 @@ static int socket_cache_cmp(const struct socket_cache *a,
 			    const struct socket_cache *b)
 {
 	size_t start = offsetof(typeof(*a), sock_type);
-	size_t end = offsetof(typeof(*a), addr) + sizeof(a->addr);
+	size_t end = offsetof(typeof(*a), addr) +
+			offsetof(typeof(a->addr), ss_family) +
+			sizeof(a->addr.ss_family);
 
-	return memcmp((const char *)a + start, (const char *)b + start,
-		      end - start);
+	if (memcmp((const char *)a + start, (const char *)b + start,
+		   end - start))
+		return 1; /* Mismatch */
+
+	/* For AF_INET and AF_INET6 either address may be
+	 * the wildcard address
+	 */
+	switch (a->addr.ss_family) {
+	case AF_INET:
+		{
+		struct sockaddr_in *addr_a = (struct sockaddr_in *)&(a->addr);
+		struct sockaddr_in *addr_b = (struct sockaddr_in *)&(b->addr);
+		if (addr_a->sin_port != addr_b->sin_port)
+			return 1; /* Mismatch */
+		if (addr_a->sin_addr.s_addr != INADDR_ANY &&
+		    addr_b->sin_addr.s_addr != INADDR_ANY &&
+		    addr_a->sin_addr.s_addr != addr_b->sin_addr.s_addr)
+			return 1; /* Mismatch */
+		}
+		break;
+	case AF_INET6:
+		{
+		struct sockaddr_in6 *addr_a = (struct sockaddr_in6 *)&(a->addr);
+		struct sockaddr_in6 *addr_b = (struct sockaddr_in6 *)&(b->addr);
+		if (addr_a->sin6_port != addr_b->sin6_port)
+			return 1; /* Mismatch */
+		if (memcmp(&(addr_a->sin6_addr), &in6addr_any,
+			   sizeof(addr_a->sin6_addr)) &&
+		    memcmp(&(addr_b->sin6_addr), &in6addr_any,
+			   sizeof(in6addr_any)) &&
+		    memcmp(&(addr_b->sin6_addr), &in6addr_any,
+			   sizeof(in6addr_any)))
+			return 1; /* Mismatch */
+		}
+		break;
+	}
+
+	return 0; /* Match */
 }
 
 static int socket_cache_cmp_detail(const struct socket_cache *a,
 				const struct socket_cache *b)
 {
-	size_t start = offsetof(typeof(*a), options);
+	size_t start = offsetof(typeof(*a), addr);
 	size_t end = offsetof(typeof(*a), maxseg) + sizeof(a->maxseg);
 
 	if ((a->interface || b->interface) &&
 	    (!a->interface || !b->interface ||
 	      strcmp(a->interface, b->interface)))
-	     return -1;
+ 	     return -1;
 
 	return memcmp((const char *)a + start, (const char *)b + start,
 		      end - start);
@@ -262,11 +300,22 @@ int socket_cache_get(const struct listener *listener)
 	socket_cache_body_assign(&a, listener);
 	a.interface = listener->interface;
 
-	/* First find a cache entry whose type, protocol and address match
-	 * which is available.  There should only ever be at most one match.
-	 * If this match matches the listener's details then use it.
-	 * Else close its fd and invalidate it as it is of no use
+	/* First find a cache entry which is available and whose type,
+	 * protocol and address match. Wildcard matches are allowed for
+	 " the address. For a valid configuration there should only ever
+	 * be at most one match.
+	 *
+	 * If a match is found verify the listener's details incuding
+	 * an exact match on the address. If this is successful then
+	 " use the fd associated with the socket_cache entry. Else close
+	 * its file descriptor and invalidate it as it is of no use and
 	 * and will prevent binding of a fresh socket.
+	 *
+	 * By performing a wildcard match on the address any sockets that
+	 " would prevent the binding of a new socket to a requsted address,
+	 " wildcard or otherwise, are found. By then closing the file
+	 * descriptor of non-exact matches bind can subsequently be called
+	 * for the requested address.
 	 */
 	for (b = socket_cache; b; b = b->next) {
 		if (b->state == SC_AVAILABLE && !socket_cache_cmp(&a, b)) {
