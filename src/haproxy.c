@@ -1368,6 +1368,28 @@ static void create_processes(int argc, char **argv, FILE *pidfile)
 		}
 	}
 
+	if (global.mode & MODE_MASTER_WORKER) {
+		replace_workers_task = task_new();
+		if (unlikely(replace_workers_task == NULL)) {
+			send_log(NULL, LOG_ERR,
+				 "Cannot create reaper task.\n");
+			protocol_unbind_all();
+			exit(1); /* there has been an error */
+		}
+
+		replace_workers_task->process = task_replace_workers;
+		replace_workers_task->expire = TICK_ETERNITY;
+
+		send_log(NULL, LOG_INFO,
+			 "Register sig_reaper.\n");
+		signal_register_fct(SIGCHLD, sig_reaper, SIGCHLD);
+
+		/* Reap any children that died while master restart
+		 * was in progress
+		 */
+		sig_reaper(NULL);
+	}
+
 	/* the father launches the required number of processes */
 	for (proc = 0; proc < global.nbproc; proc++) {
 		/* In the case of replacing_workers a worker may still exist */
@@ -1393,20 +1415,7 @@ static void create_processes(int argc, char **argv, FILE *pidfile)
 			exit(0);
 
 		is_master = 1;
-		if (!replace_workers_task) {
-			replace_workers_task = task_new();
-			if (unlikely(replace_workers_task == NULL)) {
-				send_log(NULL, LOG_ERR,
-					 "Cannot create reaper task.\n");
-				protocol_unbind_all();
-				exit(1); /* there has been an error */
-			}
 
-			replace_workers_task->process = task_replace_workers;
-			replace_workers_task->expire = TICK_ETERNITY;
-
-			signal_register_fct(SIGCHLD, sig_reaper, SIGCHLD);
-		}
 	} else { /* Child */
 		is_master = 0;
 		close_log();
