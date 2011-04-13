@@ -1509,9 +1509,9 @@ int main(int argc, char **argv)
 
 	while (1) {
 		if (!replacing_workers) {
-			FILE *newpidfile = prepare(argc, argv);
-			if (!is_master)
-				pidfile = newpidfile;
+			if (pidfile)
+				fclose(pidfile);
+			pidfile = prepare(argc, argv);
 			mode = global.mode & (MODE_QUIET|MODE_VERBOSE);
 		} else
 			/* Restore value of mode before it was
