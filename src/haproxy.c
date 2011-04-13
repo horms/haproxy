@@ -1521,6 +1521,11 @@ int main(int argc, char **argv)
 		create_processes(argc, argv, pidfile);
 		post(argv[0]);
 
+		if (pidfile && !is_master) {
+			fclose(pidfile);
+			pidfile = NULL;
+		}
+
 		/*
 		 * That's it : the central polling loop. Run until we stop.
 		 */
