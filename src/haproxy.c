@@ -1423,6 +1423,15 @@ static void create_processes(int argc, char **argv, FILE *pidfile)
 	}
 
 	if (proc == global.nbproc) { /* Parent */
+		if (pidfile) {
+			rewind(pidfile);
+			ftruncate(fileno(pidfile), 0);
+			if (global.mode & MODE_MASTER_WORKER)
+				fprintf(pidfile, "%d\n", pid);
+			for (proc = 0; proc < nb_oldpids; proc++)
+				fprintf(pidfile, "%d\n", oldpids[proc]);
+			fflush(pidfile);
+		}
 		if (!(global.mode & MODE_MASTER_WORKER))
 			/* The parent process is no longer needed */
 			exit(0);
@@ -1466,16 +1475,6 @@ static void create_processes(int argc, char **argv, FILE *pidfile)
 		fclose(stdin); fclose(stdout); fclose(stderr);
 		global.mode &= ~MODE_VERBOSE;
 		global.mode |= MODE_QUIET; /* ensure that we won't say anything from now */
-	}
-
-	if (pidfile && (is_master || !(global.mode & MODE_MASTER_WORKER))) {
-		rewind(pidfile);
-		ftruncate(fileno(pidfile), 0);
-		if (is_master)
-			fprintf(pidfile, "%d\n", pid);
-		for (proc = 0; proc < nb_oldpids; proc++)
-			fprintf(pidfile, "%d\n", oldpids[proc]);
-		fflush(pidfile);
 	}
 
 	fork_poller();
