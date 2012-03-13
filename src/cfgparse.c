@@ -1630,6 +1630,10 @@ static int init_check(struct check *check, int type, const char * file, int line
 {
 	check->type = type;
 
+	if (check->type == PR_O2_EXT_CHK)
+		/* Nothing left to do for external checks */
+		return 0;
+
 	/* Allocate buffer for requests... */
 	if ((check->bi = calloc(sizeof(struct buffer) + global.tune.chksize, sizeof(char))) == NULL) {
 		Alert("parsing [%s:%d] : out of memory while allocating check buffer.\n", file, linenum);
@@ -3731,6 +3735,22 @@ stats_error_parsing:
 			curproxy->check_req = (char *) malloc(sizeof(DEF_LDAP_CHECK_REQ) - 1);
 			memcpy(curproxy->check_req, DEF_LDAP_CHECK_REQ, sizeof(DEF_LDAP_CHECK_REQ) - 1);
 			curproxy->check_len = sizeof(DEF_LDAP_CHECK_REQ) - 1;
+		}
+		else if (!strcmp(args[1], "external-check")) {
+			/* excute an external command to check servers' health */
+			free(curproxy->check_req);
+			curproxy->check_req = NULL;
+			curproxy->options2 &= ~PR_O2_CHK_ANY;
+			curproxy->options2 |= PR_O2_EXT_CHK;
+
+			if (!*(args[2])) {
+				Alert("parsing [%s:%d] : '%s' expects command as argument.\n",
+				      file, linenum, args[0]);
+				err_code |= ERR_ALERT | ERR_FATAL;
+				goto out;
+			}
+			curproxy->check_req = strdup(args[2]);
+			curproxy->check_len = strlen(curproxy->check_req);
 		}
 		else if (!strcmp(args[1], "forwardfor")) {
 			int cur_arg;
