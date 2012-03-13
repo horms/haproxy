@@ -41,6 +41,10 @@ enum {
 	HCHK_STATUS_L7OKCD,		/* L7 check conditionally passed */
 	HCHK_STATUS_L7STS,		/* L7 response error, for example HTTP 5xx */
 
+	HCHK_STATUS_PROCERR,		/* External process check  error or failure */
+	HCHK_STATUS_PROCTOUT,		/* External process check timeout */
+	HCHK_STATUS_PROCOK,		/* External process check passed */
+
 	HCHK_STATUS_SIZE
 };
 
