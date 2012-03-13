@@ -24,6 +24,7 @@
 
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <stdbool.h>
 
 #ifdef USE_OPENSSL
 #include <openssl/ssl.h>
@@ -99,6 +100,14 @@
 #define SRV_SSL_O_NO_TLS_TICKETS 0x0100 /* disable session resumption tickets */
 #endif
 
+struct pid_list {
+	struct list list;
+	pid_t pid;
+	struct task *t;
+	int status;
+	bool exited;
+};
+
 /* A tree occurrence is a descriptor of a place in a tree, with a pointer back
  * to the server itself.
  */
@@ -109,17 +118,24 @@ struct tree_occ {
 };
 
 struct check {
-	struct connection *conn;		/* connection state for health checks */
-
+	union {
+		struct {
+			struct connection *conn;/* connection state for health checks */
+			struct buffer *bi, *bo;	/* input and output buffers to send/recv check */
+			int use_ssl;		/* use SSL for health checks */
+			int send_proxy;		/* send a PROXY protocol header with checks */
+		};
+		struct {
+			char **argv;		/* the arguments to use if running a process-based check */
+			struct pid_list *curpid;/* entry in pid_list used for current process-based test, or -1 if not in test */
+		};
+	};
 	short port;				/* the port to use for the health checks */
-	struct buffer *bi, *bo;			/* input and output buffers to send/recv check */
 	struct task *task;			/* the task associated to the health check processing, NULL if disabled */
 	struct timeval start;			/* last health check start time */
 	long duration;				/* time in ms took to finish last health check */
 	short status, code;			/* check result, check code */
 	char desc[HCHK_DESC_LEN];		/* health check descritpion */
-	int use_ssl;				/* use SSL for health checks */
-	int send_proxy;				/* send a PROXY protocol header with checks */
 	int inter, fastinter, downinter;        /* checks: time in milliseconds */
 	int result;				/* health-check result : SRV_CHK_* */
 	int state;				/* health-check result : CHK_* */
