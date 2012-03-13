@@ -1264,6 +1264,201 @@ static struct task *server_warmup(struct task *t)
 }
 
 /*
+ * establish a server health-check. Returns
+ * 0 on success, 1 if establishment may be retried
+ */
+static int establish_chk(struct task *t)
+{
+	struct server *s = t->context;
+	struct sockaddr_storage sa;
+	int fd;
+
+	if ((fd = socket(s->addr.ss_family, SOCK_STREAM, IPPROTO_TCP)) != -1) {
+		if ((fd < global.maxsock) &&
+		    (fcntl(fd, F_SETFL, O_NONBLOCK) != -1) &&
+		    (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char *) &one, sizeof(one)) != -1)) {
+			//fprintf(stderr, "establish_chk: 3\n");
+
+			if (s->proxy->options & PR_O_TCP_NOLING) {
+				/* We don't want to useless data */
+				setsockopt(fd, SOL_SOCKET, SO_LINGER, (struct linger *) &nolinger, sizeof(struct linger));
+			}
+
+			if (is_addr(&s->check_addr))
+				/* we'll connect to the check addr specified on the server */
+				sa = s->check_addr;
+			else
+				/* we'll connect to the addr on the server */
+				sa = s->addr;
+
+			set_host_port(&sa, s->check_port);
+
+			/* allow specific binding :
+			 * - server-specific at first
+			 * - proxy-specific next
+			 */
+			if (s->state & SRV_BIND_SRC) {
+				struct sockaddr_storage *remote = NULL;
+				int ret, flags = 0;
+
+#if defined(CONFIG_HAP_CTTPROXY) || defined(CONFIG_HAP_LINUX_TPROXY)
+				if ((s->state & SRV_TPROXY_MASK) == SRV_TPROXY_ADDR) {
+					remote = &s->tproxy_addr;
+					flags  = 3;
+				}
+#endif
+#ifdef SO_BINDTODEVICE
+				/* Note: this might fail if not CAP_NET_RAW */
+				if (s->iface_name)
+					setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE,
+						   s->iface_name, s->iface_len + 1);
+#endif
+				if (s->sport_range) {
+					int bind_attempts = 10; /* should be more than enough to find a spare port */
+					struct sockaddr_storage src;
+
+					ret = 1;
+					src = s->source_addr;
+
+					do {
+						/* note: in case of retry, we may have to release a previously
+						 * allocated port, hence this loop's construct.
+						 */
+						port_range_release_port(fdinfo[fd].port_range, fdinfo[fd].local_port);
+						fdinfo[fd].port_range = NULL;
+
+						if (!bind_attempts)
+							break;
+						bind_attempts--;
+
+						fdinfo[fd].local_port = port_range_alloc_port(s->sport_range);
+						if (!fdinfo[fd].local_port)
+							break;
+
+						fdinfo[fd].port_range = s->sport_range;
+						set_host_port(&src, fdinfo[fd].local_port);
+
+						ret = tcp_bind_socket(fd, flags, &src, remote);
+					} while (ret != 0); /* binding NOK */
+				}
+				else {
+					ret = tcp_bind_socket(fd, flags, &s->source_addr, remote);
+				}
+
+				if (ret) {
+					set_server_check_status(s, HCHK_STATUS_SOCKERR, NULL);
+					switch (ret) {
+					case 1:
+						Alert("Cannot bind to source address before connect() for server %s/%s. Aborting.\n",
+						      s->proxy->id, s->id);
+						break;
+					case 2:
+						Alert("Cannot bind to tproxy source address before connect() for server %s/%s. Aborting.\n",
+						      s->proxy->id, s->id);
+						break;
+					}
+				}
+			}
+			else if (s->proxy->options & PR_O_BIND_SRC) {
+				struct sockaddr_storage *remote = NULL;
+				int ret, flags = 0;
+
+#if defined(CONFIG_HAP_CTTPROXY) || defined(CONFIG_HAP_LINUX_TPROXY)
+				if ((s->proxy->options & PR_O_TPXY_MASK) == PR_O_TPXY_ADDR) {
+					remote = &s->proxy->tproxy_addr;
+					flags  = 3;
+				}
+#endif
+#ifdef SO_BINDTODEVICE
+				/* Note: this might fail if not CAP_NET_RAW */
+				if (s->proxy->iface_name)
+					setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE,
+						   s->proxy->iface_name, s->proxy->iface_len + 1);
+#endif
+				ret = tcp_bind_socket(fd, flags, &s->proxy->source_addr, remote);
+				if (ret) {
+					set_server_check_status(s, HCHK_STATUS_SOCKERR, NULL);
+					switch (ret) {
+					case 1:
+						Alert("Cannot bind to source address before connect() for %s '%s'. Aborting.\n",
+						      proxy_type_str(s->proxy), s->proxy->id);
+						break;
+					case 2:
+						Alert("Cannot bind to tproxy source address before connect() for %s '%s'. Aborting.\n",
+						      proxy_type_str(s->proxy), s->proxy->id);
+						break;
+					}
+				}
+			}
+
+			if (s->result == SRV_CHK_UNKNOWN) {
+#if defined(TCP_QUICKACK)
+				/* disabling tcp quick ack now allows
+				 * the request to leave the machine with
+				 * the first ACK.
+				 */
+				if (s->proxy->options2 & PR_O2_SMARTCON)
+					setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, (char *) &zero, sizeof(zero));
+#endif
+				if ((connect(fd, (struct sockaddr *)&sa, get_addr_len(&sa)) != -1) || (errno == EINPROGRESS)) {
+					/* OK, connection in progress or established */
+
+					//fprintf(stderr, "establish_chk: 4\n");
+
+					s->curfd = fd; /* that's how we know a test is in progress ;-) */
+					fd_insert(fd);
+					fdtab[fd].owner = t;
+					fdtab[fd].cb[DIR_RD].f = &event_srv_chk_r;
+					fdtab[fd].cb[DIR_RD].b = NULL;
+					fdtab[fd].cb[DIR_WR].f = &event_srv_chk_w;
+					fdtab[fd].cb[DIR_WR].b = NULL;
+					fdinfo[fd].peeraddr = (struct sockaddr *)&sa;
+					fdinfo[fd].peerlen = get_addr_len(&sa);
+					fdtab[fd].state = FD_STCONN; /* connection in progress */
+					fdtab[fd].flags = FD_FL_TCP | FD_FL_TCP_NODELAY;
+					EV_FD_SET(fd, DIR_WR);  /* for connect status */
+#ifdef DEBUG_FULL
+					assert (!EV_FD_ISSET(fd, DIR_RD));
+#endif
+					//fprintf(stderr, "establish_chk: 4+, %lu\n", __tv_to_ms(&s->proxy->timeout.connect));
+					/* we allow up to min(inter, timeout.connect) for a connection
+					 * to establish but only when timeout.check is set
+					 * as it may be to short for a full check otherwise
+					 */
+					t->expire = tick_add(now_ms, MS_TO_TICKS(s->inter));
+
+					if (s->proxy->timeout.check && s->proxy->timeout.connect) {
+						int t_con = tick_add(now_ms, s->proxy->timeout.connect);
+						t->expire = tick_first(t->expire, t_con);
+					}
+					return 0;
+				}
+				else if (errno != EALREADY && errno != EISCONN && errno != EAGAIN) {
+					/* a real error */
+
+					switch (errno) {
+						/* FIXME: is it possible to get ECONNREFUSED/ENETUNREACH with O_NONBLOCK? */
+						case ECONNREFUSED:
+						case ENETUNREACH:
+							set_server_check_status(s, HCHK_STATUS_L4CON, strerror(errno));
+							break;
+
+						default:
+							set_server_check_status(s, HCHK_STATUS_SOCKERR, strerror(errno));
+					}
+				}
+			}
+		}
+		port_range_release_port(fdinfo[fd].port_range, fdinfo[fd].local_port);
+		fdinfo[fd].port_range = NULL;
+		close(fd); /* socket creation error */
+	}
+	else
+		set_server_check_status(s, HCHK_STATUS_SOCKERR, strerror(errno));
+	return 1;
+}
+
+/*
  * manages a server health-check. Returns
  * the time the task accepts to wait, or TIME_ETERNITY for infinity.
  */
@@ -1271,7 +1466,6 @@ static struct task *process_chk(struct task *t)
 {
 	int attempts = 0;
 	struct server *s = t->context;
-	struct sockaddr_storage sa;
 	int fd;
 	int rv;
 
@@ -1298,188 +1492,8 @@ static struct task *process_chk(struct task *t)
 
 		/* we'll initiate a new check */
 		set_server_check_status(s, HCHK_STATUS_START, NULL);
-		if ((fd = socket(s->addr.ss_family, SOCK_STREAM, IPPROTO_TCP)) != -1) {
-			if ((fd < global.maxsock) &&
-			    (fcntl(fd, F_SETFL, O_NONBLOCK) != -1) &&
-			    (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char *) &one, sizeof(one)) != -1)) {
-				//fprintf(stderr, "process_chk: 3\n");
-
-				if (s->proxy->options & PR_O_TCP_NOLING) {
-					/* We don't want to useless data */
-					setsockopt(fd, SOL_SOCKET, SO_LINGER, (struct linger *) &nolinger, sizeof(struct linger));
-				}
-
-				if (is_addr(&s->check_addr))
-					/* we'll connect to the check addr specified on the server */
-					sa = s->check_addr;
-				else
-					/* we'll connect to the addr on the server */
-					sa = s->addr;
-
-				set_host_port(&sa, s->check_port);
-
-				/* allow specific binding :
-				 * - server-specific at first
-				 * - proxy-specific next
-				 */
-				if (s->state & SRV_BIND_SRC) {
-					struct sockaddr_storage *remote = NULL;
-					int ret, flags = 0;
-
-#if defined(CONFIG_HAP_CTTPROXY) || defined(CONFIG_HAP_LINUX_TPROXY)
-					if ((s->state & SRV_TPROXY_MASK) == SRV_TPROXY_ADDR) {
-						remote = &s->tproxy_addr;
-						flags  = 3;
-					}
-#endif
-#ifdef SO_BINDTODEVICE
-					/* Note: this might fail if not CAP_NET_RAW */
-					if (s->iface_name)
-						setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE,
-							   s->iface_name, s->iface_len + 1);
-#endif
-					if (s->sport_range) {
-						int bind_attempts = 10; /* should be more than enough to find a spare port */
-						struct sockaddr_storage src;
-
-						ret = 1;
-						src = s->source_addr;
-
-						do {
-							/* note: in case of retry, we may have to release a previously
-							 * allocated port, hence this loop's construct.
-							 */
-							port_range_release_port(fdinfo[fd].port_range, fdinfo[fd].local_port);
-							fdinfo[fd].port_range = NULL;
-
-							if (!bind_attempts)
-								break;
-							bind_attempts--;
-
-							fdinfo[fd].local_port = port_range_alloc_port(s->sport_range);
-							if (!fdinfo[fd].local_port)
-								break;
-
-							fdinfo[fd].port_range = s->sport_range;
-							set_host_port(&src, fdinfo[fd].local_port);
-
-							ret = tcp_bind_socket(fd, flags, &src, remote);
-						} while (ret != 0); /* binding NOK */
-					}
-					else {
-						ret = tcp_bind_socket(fd, flags, &s->source_addr, remote);
-					}
-
-					if (ret) {
-						set_server_check_status(s, HCHK_STATUS_SOCKERR, NULL);
-						switch (ret) {
-						case 1:
-							Alert("Cannot bind to source address before connect() for server %s/%s. Aborting.\n",
-							      s->proxy->id, s->id);
-							break;
-						case 2:
-							Alert("Cannot bind to tproxy source address before connect() for server %s/%s. Aborting.\n",
-							      s->proxy->id, s->id);
-							break;
-						}
-					}
-				}
-				else if (s->proxy->options & PR_O_BIND_SRC) {
-					struct sockaddr_storage *remote = NULL;
-					int ret, flags = 0;
-
-#if defined(CONFIG_HAP_CTTPROXY) || defined(CONFIG_HAP_LINUX_TPROXY)
-					if ((s->proxy->options & PR_O_TPXY_MASK) == PR_O_TPXY_ADDR) {
-						remote = &s->proxy->tproxy_addr;
-						flags  = 3;
-					}
-#endif
-#ifdef SO_BINDTODEVICE
-					/* Note: this might fail if not CAP_NET_RAW */
-					if (s->proxy->iface_name)
-						setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE,
-							   s->proxy->iface_name, s->proxy->iface_len + 1);
-#endif
-					ret = tcp_bind_socket(fd, flags, &s->proxy->source_addr, remote);
-					if (ret) {
-						set_server_check_status(s, HCHK_STATUS_SOCKERR, NULL);
-						switch (ret) {
-						case 1:
-							Alert("Cannot bind to source address before connect() for %s '%s'. Aborting.\n",
-							      proxy_type_str(s->proxy), s->proxy->id);
-							break;
-						case 2:
-							Alert("Cannot bind to tproxy source address before connect() for %s '%s'. Aborting.\n",
-							      proxy_type_str(s->proxy), s->proxy->id);
-							break;
-						}
-					}
-				}
-
-				if (s->result == SRV_CHK_UNKNOWN) {
-#if defined(TCP_QUICKACK)
-					/* disabling tcp quick ack now allows
-					 * the request to leave the machine with
-					 * the first ACK.
-					 */
-					if (s->proxy->options2 & PR_O2_SMARTCON)
-						setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, (char *) &zero, sizeof(zero));
-#endif
-					if ((connect(fd, (struct sockaddr *)&sa, get_addr_len(&sa)) != -1) || (errno == EINPROGRESS)) {
-						/* OK, connection in progress or established */
-			
-						//fprintf(stderr, "process_chk: 4\n");
-			
-						s->curfd = fd; /* that's how we know a test is in progress ;-) */
-						fd_insert(fd);
-						fdtab[fd].owner = t;
-						fdtab[fd].cb[DIR_RD].f = &event_srv_chk_r;
-						fdtab[fd].cb[DIR_RD].b = NULL;
-						fdtab[fd].cb[DIR_WR].f = &event_srv_chk_w;
-						fdtab[fd].cb[DIR_WR].b = NULL;
-						fdinfo[fd].peeraddr = (struct sockaddr *)&sa;
-						fdinfo[fd].peerlen = get_addr_len(&sa);
-						fdtab[fd].state = FD_STCONN; /* connection in progress */
-						fdtab[fd].flags = FD_FL_TCP | FD_FL_TCP_NODELAY;
-						EV_FD_SET(fd, DIR_WR);  /* for connect status */
-#ifdef DEBUG_FULL
-						assert (!EV_FD_ISSET(fd, DIR_RD));
-#endif
-						//fprintf(stderr, "process_chk: 4+, %lu\n", __tv_to_ms(&s->proxy->timeout.connect));
-						/* we allow up to min(inter, timeout.connect) for a connection
-						 * to establish but only when timeout.check is set
-						 * as it may be to short for a full check otherwise
-						 */
-						t->expire = tick_add(now_ms, MS_TO_TICKS(s->inter));
-
-						if (s->proxy->timeout.check && s->proxy->timeout.connect) {
-							int t_con = tick_add(now_ms, s->proxy->timeout.connect);
-							t->expire = tick_first(t->expire, t_con);
-						}
-						return t;
-					}
-					else if (errno != EALREADY && errno != EISCONN && errno != EAGAIN) {
-						/* a real error */
-
-						switch (errno) {
-							/* FIXME: is it possible to get ECONNREFUSED/ENETUNREACH with O_NONBLOCK? */
-							case ECONNREFUSED:
-							case ENETUNREACH:
-								set_server_check_status(s, HCHK_STATUS_L4CON, strerror(errno));
-								break;
-
-							default:
-								set_server_check_status(s, HCHK_STATUS_SOCKERR, strerror(errno));
-						}
-					}
-				}
-			}
-			port_range_release_port(fdinfo[fd].port_range, fdinfo[fd].local_port);
-			fdinfo[fd].port_range = NULL;
-			close(fd); /* socket creation error */
-		}
-		else
-			set_server_check_status(s, HCHK_STATUS_SOCKERR, strerror(errno));
+		if (establish_chk(t) == 0)
+			return t;
 
 		if (s->result == SRV_CHK_UNKNOWN) { /* nothing done */
 			//fprintf(stderr, "process_chk: 6\n");
