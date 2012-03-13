@@ -152,6 +152,7 @@ enum {
 #define PR_O2_LDAP_CHK  0x60000000      /* use LDAP check for server health */
 #define PR_O2_SSL3_CHK  0x70000000      /* use SSLv3 CLIENT_HELLO packets for server health */
 #define PR_O2_LB_AGENT_CHK 0x80000000   /* use a TCP connection to obtain a metric of server health */
+#define PR_O2_EXT_CHK   0x90000000      /* use external command for server health */
 /* unused: 0x90000000 to 0xF000000, reserved for health checks */
 #define PR_O2_CHK_ANY   0xF0000000      /* Mask to cover any check */
 /* end of proxy->options2 */
