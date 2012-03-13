@@ -15,6 +15,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +23,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
@@ -76,6 +78,10 @@ static const struct check_status check_statuses[HCHK_STATUS_SIZE] = {
 	[HCHK_STATUS_L7OKD]	= { SRV_CHK_RUNNING,                   "L7OK",    "Layer7 check passed" },
 	[HCHK_STATUS_L7OKCD]	= { SRV_CHK_RUNNING | SRV_CHK_DISABLE, "L7OKC",   "Layer7 check conditionally passed" },
 	[HCHK_STATUS_L7STS]	= { SRV_CHK_ERROR,                     "L7STS",   "Layer7 wrong status" },
+
+	[HCHK_STATUS_PROCERR]	= { SRV_CHK_ERROR,                     "PROCERR", "External check error" },
+	[HCHK_STATUS_PROCTOUT]	= { SRV_CHK_ERROR,                     "PROCTOUT",  "External check timeout" },
+	[HCHK_STATUS_PROCOK]	= { SRV_CHK_RUNNING,                   "PROCOK",  "External check passed" },
 };
 
 static const struct analyze_status analyze_statuses[HANA_STATUS_SIZE] = {		/* 0: ignore, 1: error, 2: OK */
@@ -1264,10 +1270,10 @@ static struct task *server_warmup(struct task *t)
 }
 
 /*
- * establish a server health-check. Returns
- * 0 on success, 1 if establishment may be retried
+ * establish a server health-check that makes use of a socket.
+ * Returns 0 on success, 1 if establishment may be retried
  */
-static int establish_chk(struct task *t)
+static int establish_sock_chk(struct task *t)
 {
 	struct server *s = t->context;
 	struct sockaddr_storage sa;
@@ -1277,7 +1283,7 @@ static int establish_chk(struct task *t)
 		if ((fd < global.maxsock) &&
 		    (fcntl(fd, F_SETFL, O_NONBLOCK) != -1) &&
 		    (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char *) &one, sizeof(one)) != -1)) {
-			//fprintf(stderr, "establish_chk: 3\n");
+			//fprintf(stderr, "establish_sock_chk: 3\n");
 
 			if (s->proxy->options & PR_O_TCP_NOLING) {
 				/* We don't want to useless data */
@@ -1403,7 +1409,7 @@ static int establish_chk(struct task *t)
 				if ((connect(fd, (struct sockaddr *)&sa, get_addr_len(&sa)) != -1) || (errno == EINPROGRESS)) {
 					/* OK, connection in progress or established */
 
-					//fprintf(stderr, "establish_chk: 4\n");
+					//fprintf(stderr, "establish_sock_chk: 4\n");
 
 					s->curfd = fd; /* that's how we know a test is in progress ;-) */
 					fd_insert(fd);
@@ -1420,7 +1426,7 @@ static int establish_chk(struct task *t)
 #ifdef DEBUG_FULL
 					assert (!EV_FD_ISSET(fd, DIR_RD));
 #endif
-					//fprintf(stderr, "establish_chk: 4+, %lu\n", __tv_to_ms(&s->proxy->timeout.connect));
+					//fprintf(stderr, "establish_sock_chk: 4+, %lu\n", __tv_to_ms(&s->proxy->timeout.connect));
 					/* we allow up to min(inter, timeout.connect) for a connection
 					 * to establish but only when timeout.check is set
 					 * as it may be to short for a full check otherwise
@@ -1458,6 +1464,192 @@ static int establish_chk(struct task *t)
 	return 1;
 }
 
+static struct list pid_list = LIST_HEAD_INIT(pid_list);
+static struct pool_head *pool2_pid_list;
+
+void block_sigchld(void)
+{
+	sigset_t set;
+	sigemptyset(&set);
+	sigaddset(&set, SIGCHLD);
+	assert(sigprocmask(SIG_SETMASK, &set, NULL) == 0);
+}
+
+void unblock_sigchld(void)
+{
+	sigset_t set;
+	sigemptyset(&set);
+	assert(sigprocmask(SIG_SETMASK, &set, NULL) == 0);
+}
+
+/* Call with SIGCHLD blocked */
+static struct pid_list *pid_list_add(pid_t pid, struct task *t)
+{
+	struct pid_list *elem;
+	struct server *s = t->context;
+
+	elem = pool_alloc2(pool2_pid_list);
+	if (!elem)
+		return NULL;
+	elem->pid = pid;
+	elem->t = t;
+	elem->exited = false;
+	s->curpid = elem;
+	LIST_INIT(&elem->list);
+	LIST_ADD(&pid_list, &elem->list);
+	return elem;
+}
+
+/* Blocks blocks and then unblocks SIGCHLD */
+static void pid_list_del(struct pid_list *elem)
+{
+	struct server *s = elem->t->context;
+
+	if (!elem)
+		return;
+
+	block_sigchld();
+	LIST_DEL(&elem->list);
+	unblock_sigchld();
+	if (!elem->exited)
+		kill(elem->pid, SIGTERM);
+
+	s = elem->t->context;
+	s->curpid = NULL;
+	pool_free2(pool2_pid_list, elem);
+}
+
+/* Called from inside SIGCHLD handler, SIGCHLD is blocked */
+static void pid_list_expire(pid_t pid, int status)
+{
+	struct pid_list *elem;
+
+	list_for_each_entry(elem, &pid_list, list) {
+		if (elem->pid == pid) {
+			elem->t->expire = now_ms;
+			elem->status = status;
+			elem->exited = true;
+			return;
+		}
+	}
+}
+
+static void sigchld_handler(int signal)
+{
+	pid_t pid;
+	int status;
+	while ((pid = waitpid(0, &status, WNOHANG)) > 0)
+		pid_list_expire(pid, status);
+}
+
+static int init_pid_list(void) {
+	struct sigaction action = {
+		.sa_handler = sigchld_handler,
+		.sa_flags = SA_NOCLDSTOP
+	};
+
+	if (pool2_pid_list != NULL)
+		/* Nothing to do */
+		return 0;
+
+	if (sigaction(SIGCHLD, &action, NULL)) {
+		Alert("Failed to set signal handler for external health checks: %s. Aborting.\n",
+		      strerror(errno));
+		return 1;
+	}
+
+	pool2_pid_list = create_pool("pid_list", sizeof(struct pid_list), MEM_F_SHARED);
+	if (pool2_pid_list == NULL) {
+		Alert("Failed to allocate memory pool for external health checks: %s. Aborting.\n",
+		      strerror(errno));
+		return 1;
+	}
+
+	return 0;
+}
+
+/*
+ * establish a server health-check that makes use of an external process.
+ * Returns 0 on success, 1 if establishment may be retried
+ *
+ * Blocks blocks and then unblocks SIGCHLD
+ */
+static int establish_proc_chk(struct task *t)
+{
+	struct server *s = t->context;
+	int status = 1;
+	pid_t pid;
+
+	block_sigchld();
+
+	pid = fork();
+	if (pid < 0) {
+		Alert("Failed to fork process for external health check: %s. Aborting.\n",
+		      strerror(errno));
+		set_server_check_status(s, HCHK_STATUS_SOCKERR, strerror(errno));
+		goto out;
+	}
+	if (pid == 0) {
+		/* Child */
+		exit(0);
+	}
+
+	/* Parent */
+	if (s->result == SRV_CHK_UNKNOWN) {
+		if (pid_list_add(pid, t) != NULL) {
+			t->expire = tick_add(now_ms, MS_TO_TICKS(s->inter));
+
+			if (s->proxy->timeout.check && s->proxy->timeout.connect) {
+				int t_con = tick_add(now_ms, s->proxy->timeout.connect);
+				t->expire = tick_first(t->expire, t_con);
+			}
+			status = 0;
+			goto out;
+		}
+		else {
+			set_server_check_status(s, HCHK_STATUS_SOCKERR, strerror(errno));
+		}
+		kill(pid, SIGTERM); /* process creation error */
+	}
+	else
+		set_server_check_status(s, HCHK_STATUS_SOCKERR, strerror(errno));
+
+out:
+	unblock_sigchld();
+	return status;
+}
+
+/*
+ * establish a server health-check. Returns
+ * 0 on success, 1 if establishment may be retried
+ */
+static int establish_chk(struct task *t)
+{
+	struct server *s = t->context;
+
+	if ((s->proxy->options2 & PR_O2_CHK_ANY) == PR_O2_EXT_CHK)
+		return establish_proc_chk(t);
+	return establish_sock_chk(t);
+}
+
+static bool is_check_running(struct server *s)
+{
+	if ((s->proxy->options2 & PR_O2_CHK_ANY) == PR_O2_EXT_CHK)
+		return s->curpid != NULL;
+	else
+		return s->curfd >= 0;
+}
+
+static void set_check_is_not_running(struct server *s)
+{
+	if ((s->proxy->options2 & PR_O2_CHK_ANY) == PR_O2_EXT_CHK) {
+		pid_list_del(s->curpid);
+	} else {
+		fd_delete(s->curfd);
+		s->curfd = -1;
+	}
+}
+
 /*
  * manages a server health-check. Returns
  * the time the task accepts to wait, or TIME_ETERNITY for infinity.
@@ -1466,7 +1658,6 @@ static struct task *process_chk(struct task *t)
 {
 	int attempts = 0;
 	struct server *s = t->context;
-	int fd;
 	int rv;
 
  new_chk:
@@ -1476,8 +1667,7 @@ static struct task *process_chk(struct task *t)
 			t->expire = tick_add(t->expire, MS_TO_TICKS(s->inter));
 		return t;
 	}
-	fd = s->curfd;
-	if (fd < 0) {   /* no check currently running */
+	if (!is_check_running(s)) {   /* no check currently running */
 		if (!tick_is_expired(t->expire, now_ms)) /* woke up too early */
 			return t;
 
@@ -1528,6 +1718,23 @@ static struct task *process_chk(struct task *t)
 	}
 	else {
 		/* there was a test running */
+		if ((s->proxy->options2 & PR_O2_CHK_ANY) == PR_O2_EXT_CHK) {
+			struct pid_list *elem = s->curpid;
+			int status;
+
+			if (elem->exited) {
+				status = elem->status; /* Save incase the process exits between use below */
+				if (!WIFEXITED(status))
+					s->check_code = -1;
+				else
+					s->check_code = WEXITSTATUS(status);
+				if (!WIFEXITED(status) || WEXITSTATUS(status))
+					status = HCHK_STATUS_PROCERR;
+				else
+					status = HCHK_STATUS_PROCOK;
+				set_server_check_status(s, status, NULL);
+			}
+		}
 		if ((s->result & (SRV_CHK_ERROR|SRV_CHK_RUNNING)) == SRV_CHK_RUNNING) { /* good server detected */
 			/* we may have to add/remove this server from the LB group */
 			if ((s->state & SRV_RUNNING) && (s->proxy->options & PR_O_DISABLE404)) {
@@ -1545,8 +1752,7 @@ static struct task *process_chk(struct task *t)
 
 				set_server_up(s);
 			}
-			s->curfd = -1; /* no check running anymore */
-			fd_delete(fd);
+			set_check_is_not_running(s);
 
 			rv = 0;
 			if (global.spread_checks > 0) {
@@ -1558,7 +1764,9 @@ static struct task *process_chk(struct task *t)
 		}
 		else if ((s->result & SRV_CHK_ERROR) || tick_is_expired(t->expire, now_ms)) {
 			if (!(s->result & SRV_CHK_ERROR)) {
-				if (!EV_FD_ISSET(fd, DIR_RD)) {
+				if ((s->proxy->options2 & PR_O2_CHK_ANY) == PR_O2_EXT_CHK) {
+					set_server_check_status(s, HCHK_STATUS_PROCTOUT, NULL);
+				} else if (!EV_FD_ISSET(s->curfd, DIR_RD)) {
 					set_server_check_status(s, HCHK_STATUS_L4TOUT, NULL);
 				} else {
 					if ((s->proxy->options2 & PR_O2_CHK_ANY) == PR_O2_SSL3_CHK)
@@ -1575,8 +1783,7 @@ static struct task *process_chk(struct task *t)
 			}
 			else
 				set_server_down(s);
-			s->curfd = -1;
-			fd_delete(fd);
+			set_check_is_not_running(s);
 
 			rv = 0;
 			if (global.spread_checks > 0) {
@@ -1634,6 +1841,13 @@ int start_checks() {
 	 * the number of servers, weighted by the server's position in the list.
 	 */
 	for (px = proxy; px; px = px->next) {
+		if ((px->options2 & PR_O2_CHK_ANY) == PR_O2_EXT_CHK) {
+			if (init_pid_list()) {
+				Alert("Starting [%s] check: out of memory.\n", px->id);
+				return -1;
+			}
+		}
+
 		for (s = px->srv; s; s = s->next) {
 			if (s->slowstart) {
 				if ((t = task_new()) == NULL) {

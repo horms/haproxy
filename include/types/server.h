@@ -24,6 +24,7 @@
 
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <stdbool.h>
 
 #include <common/config.h>
 #include <common/mini-clist.h>
@@ -75,6 +76,14 @@
 #define SRV_EWGHT_RANGE (SRV_UWGHT_RANGE * BE_WEIGHT_SCALE)
 #define SRV_EWGHT_MAX   (SRV_UWGHT_MAX   * BE_WEIGHT_SCALE)
 
+struct pid_list {
+	struct list list;
+	pid_t pid;
+	struct task *t;
+	int status;
+	bool exited;
+};
+
 /* A tree occurrence is a descriptor of a place in a tree, with a pointer back
  * to the server itself.
  */
@@ -124,7 +133,10 @@ struct server {
 	int inter, fastinter, downinter;	/* checks: time in milliseconds */
 	int slowstart;				/* slowstart time in seconds (ms in the conf) */
 	int result;				/* health-check result : SRV_CHK_* */
-	int curfd;				/* file desc used for current test, or -1 if not in test */
+	union {
+		int curfd;			/* file desc used for current socket-based test, or -1 if not in test */
+		struct pid_list *curpid;	/* entry in pid_list used for current process-based test, or -1 if not in test */
+	};
 
 	char *id;				/* just for identification */
 	unsigned iweight,uweight, eweight;	/* initial weight, user-specified weight, and effective weight */
