@@ -3995,6 +3995,30 @@ option ldap-check
   See also : "option httpchk"
 
 
+option external-check
+  Use external processes for server health checks
+  May be used in sections :   defaults | frontend | listen | backend
+                                 yes   |    no    |   yes  |   yes
+  Arguments : external command to run
+
+  It is possible to test the health of a server using an external command.
+  This is achieved by running the command given as the argument to the
+  external-check option. The arguments to the command are:
+
+  proxy_address server_address check_address check_port
+
+  If the (health check) addr parameter has been provided as a parameter to
+  the server directive then it is used as the check_address, otherwise the
+  address of the server is used.
+
+  If the command executed and exits with a zero status then the check is
+  considered to have passed, otherwise the check is considered to have
+  failed.
+
+  Example :
+        option external-check /bin/true
+
+
 option log-health-checks
 no option log-health-checks
   Enable or disable logging of health checks
