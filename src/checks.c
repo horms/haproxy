@@ -22,9 +22,11 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 
 #include <common/chunk.h>
 #include <common/compat.h>
@@ -78,6 +80,10 @@ static const struct check_status check_statuses[HCHK_STATUS_SIZE] = {
 	[HCHK_STATUS_L7OKD]	= { SRV_CHK_PASSED,                    "L7OK",    "Layer7 check passed" },
 	[HCHK_STATUS_L7OKCD]	= { SRV_CHK_PASSED | SRV_CHK_DISABLE,  "L7OKC",   "Layer7 check conditionally passed" },
 	[HCHK_STATUS_L7STS]	= { SRV_CHK_FAILED,                    "L7STS",   "Layer7 wrong status" },
+
+	[HCHK_STATUS_PROCERR]	= { SRV_CHK_FAILED,                    "PROCERR", "External check error" },
+	[HCHK_STATUS_PROCTOUT]	= { SRV_CHK_FAILED,                    "PROCTOUT",  "External check timeout" },
+	[HCHK_STATUS_PROCOK]	= { SRV_CHK_PASSED,                    "PROCOK",  "External check passed" },
 };
 
 static const struct analyze_status analyze_statuses[HANA_STATUS_SIZE] = {		/* 0: ignore, 1: error, 2: OK */
@@ -231,7 +237,7 @@ static void set_server_check_status(struct check *check, short status, const cha
 	/* Failure to connect to the agent as a secondary check should not
 	 * cause the server to be marked down. So only log status changes
 	 * for HCHK_STATUS_* statuses */
-	if (check == &s->agent && check->status < HCHK_STATUS_L7TOUT)
+	if (check == &s->agent && check->status <= HCHK_STATUS_L7TOUT)
 		return;
 
 	if (s->proxy->options2 & PR_O2_LOGHCHKS &&
@@ -1385,7 +1391,7 @@ static void process_result(struct check *check)
 }
 
 /*
- * establish a server health-check.
+ * establish a server health-check that makes use of a connection.
  *
  * It can return one of :
  *  - SN_ERR_NONE if everything's OK
@@ -1396,7 +1402,7 @@ static void process_result(struct check *check)
  *  - SN_ERR_INTERNAL for any other purely internal errors
  * Additionnally, in the case of SN_ERR_RESOURCE, an emergency log will be emitted.
  */
-static int establish_chk(struct task *t)
+static int establish_conn_chk(struct task *t)
 {
 	struct check *check = t->context;
 	struct server *s = check->server;
@@ -1453,6 +1459,281 @@ static int establish_chk(struct task *t)
 	return ret;
 }
 
+static struct list pid_list = LIST_HEAD_INIT(pid_list);
+static struct pool_head *pool2_pid_list;
+
+void block_sigchld(void)
+{
+	sigset_t set;
+	sigemptyset(&set);
+	sigaddset(&set, SIGCHLD);
+	assert(sigprocmask(SIG_SETMASK, &set, NULL) == 0);
+}
+
+void unblock_sigchld(void)
+{
+	sigset_t set;
+	sigemptyset(&set);
+	assert(sigprocmask(SIG_SETMASK, &set, NULL) == 0);
+}
+
+/* Call with SIGCHLD blocked */
+static struct pid_list *pid_list_add(pid_t pid, struct task *t)
+{
+	struct pid_list *elem;
+	struct check *check = t->context;
+
+	elem = pool_alloc2(pool2_pid_list);
+	if (!elem)
+		return NULL;
+	elem->pid = pid;
+	elem->t = t;
+	elem->exited = 0;
+	check->curpid = elem;
+	LIST_INIT(&elem->list);
+	LIST_ADD(&pid_list, &elem->list);
+	return elem;
+}
+
+/* Blocks blocks and then unblocks SIGCHLD */
+static void pid_list_del(struct pid_list *elem)
+{
+	struct check *check;
+
+	if (!elem)
+		return;
+
+	block_sigchld();
+	LIST_DEL(&elem->list);
+	unblock_sigchld();
+	if (!elem->exited)
+		kill(elem->pid, SIGTERM);
+
+	check = elem->t->context;
+	check->curpid = NULL;
+	pool_free2(pool2_pid_list, elem);
+}
+
+/* Called from inside SIGCHLD handler, SIGCHLD is blocked */
+static void pid_list_expire(pid_t pid, int status)
+{
+	struct pid_list *elem;
+
+	list_for_each_entry(elem, &pid_list, list) {
+		if (elem->pid == pid) {
+			elem->t->expire = now_ms;
+			elem->status = status;
+			elem->exited = 1;
+			return;
+		}
+	}
+}
+
+static void sigchld_handler(int signal)
+{
+	pid_t pid;
+	int status;
+	while ((pid = waitpid(0, &status, WNOHANG)) > 0)
+		pid_list_expire(pid, status);
+}
+
+static int init_pid_list(void) {
+	struct sigaction action = {
+		.sa_handler = sigchld_handler,
+		.sa_flags = SA_NOCLDSTOP
+	};
+
+	if (pool2_pid_list != NULL)
+		/* Nothing to do */
+		return 0;
+
+	if (sigaction(SIGCHLD, &action, NULL)) {
+		Alert("Failed to set signal handler for external health checks: %s. Aborting.\n",
+		      strerror(errno));
+		return 1;
+	}
+
+	pool2_pid_list = create_pool("pid_list", sizeof(struct pid_list), MEM_F_SHARED);
+	if (pool2_pid_list == NULL) {
+		Alert("Failed to allocate memory pool for external health checks: %s. Aborting.\n",
+		      strerror(errno));
+		return 1;
+	}
+
+	return 0;
+}
+
+
+static int prepare_external_check(struct check *check)
+{
+	char host[NI_MAXHOST] = {};
+	char serv[NI_MAXSERV] = {};
+	struct server *s = check->server;
+	struct proxy *px = s->proxy;
+	struct listener *listener = NULL, *l;
+	int i;
+	const char *err_fmt = "Starting [%s:%s] check: out of memory.\n";
+
+	list_for_each_entry(l, &px->conf.listeners, by_fe)
+		/* Use the first INET, INET6 or UNIX listener */
+		if (l->addr.ss_family == AF_INET ||
+		    l->addr.ss_family == AF_INET6 ||
+		    l->addr.ss_family == AF_UNIX) {
+			listener = l;
+			break;
+		}
+
+	if (!listener) {
+		err_fmt = "Starting [%s:%s] check: no listener.\n";
+		goto err;
+	}
+
+	check->curpid = NULL;
+
+	check->argv = calloc(6, sizeof(check->argv));
+	if (!check->argv)
+		goto err;
+
+	check->argv[0] = px->check_req;
+
+	if (listener->addr.ss_family == AF_INET ||
+	    listener->addr.ss_family == AF_INET6) {
+		if (getnameinfo((struct sockaddr *)&listener->addr,
+				sizeof(listener->addr), host, sizeof(host),
+				serv, sizeof(serv),
+				NI_NUMERICHOST | NI_NUMERICSERV)) {
+			err_fmt = "Starting [%s:%s] check: getnameinfo failed on listener address.\n";
+			goto err_free;
+		}
+		check->argv[1] = strdup(host);
+		check->argv[2] = strdup(serv);
+	} else if (listener->addr.ss_family == AF_UNIX) {
+		const struct sockaddr_un *un;
+
+		un = (struct sockaddr_un *)&listener->addr;
+		check->argv[1] = strdup(un->sun_path);
+		check->argv[2] = strdup("NOT_USED");
+	} else {
+		goto err_free;
+	}
+
+	if (getnameinfo((struct sockaddr *)&s->addr, sizeof(s->addr),
+			host, sizeof(host), serv, sizeof(serv),
+			NI_NUMERICHOST | NI_NUMERICSERV)) {
+		err_fmt = "Starting [%s:%s] check: getnameinfo failed on check address.\n";
+		goto err_free;
+	}
+	check->argv[3] = strdup(host);
+	check->argv[4] = strdup(serv);
+
+	for (i = 0; i < 5; i++)
+		if (!check->argv[i])
+			goto err_free;
+
+	return 0;
+err_free:
+	for (i = 1; i < 5; i++)
+		free(check->argv[i]);
+	free(check->argv);
+	check->argv = NULL;
+err:
+	Alert(err_fmt, px->id, s->id);
+	return -1;
+}
+
+/*
+ * establish a server health-check that makes use of a process.
+ *
+ * It can return one of :
+ *  - SN_ERR_NONE if everything's OK
+ *  - SN_ERR_SRVTO if there are no more servers
+ *  - SN_ERR_SRVCL if the connection was refused by the server
+ *  - SN_ERR_PRXCOND if the connection has been limited by the proxy (maxconn)
+ *  - SN_ERR_RESOURCE if a system resource is lacking (eg: fd limits, ports, ...)
+ *  - SN_ERR_INTERNAL for any other purely internal errors
+ * Additionnally, in the case of SN_ERR_RESOURCE, an emergency log will be emitted.
+ *
+ * Blocks and then unblocks SIGCHLD
+ */
+static int establish_proc_chk(struct task *t)
+{
+	struct check *check = t->context;
+	struct server *s = check->server;
+	struct proxy *px = s->proxy;
+	int status;
+	pid_t pid;
+
+	if (!check->argv) {
+		status = prepare_external_check(check);
+		if (status < 0)
+			return SN_ERR_RESOURCE;
+	}
+
+	status = SN_ERR_RESOURCE;
+
+	block_sigchld();
+
+	pid = fork();
+	if (pid < 0) {
+		Alert("Failed to fork process for external health check: %s. Aborting.\n",
+		      strerror(errno));
+		set_server_check_status(check, HCHK_STATUS_SOCKERR, strerror(errno));
+		goto out;
+	}
+	if (pid == 0) {
+		/* Child */
+		execvp(px->check_req, check->argv);
+		Alert("Failed to exec process for external health check: %s. Aborting.\n",
+		      strerror(errno));
+		exit(-1);
+	}
+
+	/* Parent */
+	if (check->result == SRV_CHK_UNKNOWN) {
+		if (pid_list_add(pid, t) != NULL) {
+			t->expire = tick_add(now_ms, MS_TO_TICKS(check->inter));
+
+			if (px->timeout.check && px->timeout.connect) {
+				int t_con = tick_add(now_ms, px->timeout.connect);
+				t->expire = tick_first(t->expire, t_con);
+			}
+			status = SN_ERR_NONE;
+			goto out;
+		}
+		else {
+			set_server_check_status(check, HCHK_STATUS_SOCKERR, strerror(errno));
+		}
+		kill(pid, SIGTERM); /* process creation error */
+	}
+	else
+		set_server_check_status(check, HCHK_STATUS_SOCKERR, strerror(errno));
+
+out:
+	unblock_sigchld();
+	return status;
+}
+
+/*
+ * establish a server health-check.
+ *
+ * It can return one of :
+ *  - SN_ERR_NONE if everything's OK
+ *  - SN_ERR_SRVTO if there are no more servers
+ *  - SN_ERR_SRVCL if the connection was refused by the server
+ *  - SN_ERR_PRXCOND if the connection has been limited by the proxy (maxconn)
+ *  - SN_ERR_RESOURCE if a system resource is lacking (eg: fd limits, ports, ...)
+ *  - SN_ERR_INTERNAL for any other purely internal errors
+ * Additionnally, in the case of SN_ERR_RESOURCE, an emergency log will be emitted.
+ */
+static int establish_chk(struct task *t)
+{
+	struct check *check = t->context;
+
+	if (check->type == PR_O2_EXT_CHK)
+		return establish_proc_chk(t);
+	return establish_conn_chk(t);
+}
+
 /*
  * manages a server health-check. Returns
  * the time the task accepts to wait, or TIME_ETERNITY for infinity.
@@ -1465,6 +1746,7 @@ static struct task *process_chk(struct task *t)
 	int rv;
 	int ret;
 	int expired = tick_is_expired(t->expire, now_ms);
+	int has_conn = check->type != PR_O2_EXT_CHK;
 
 	if (!(check->state & CHK_RUNNING)) {
 		/* no check currently running */
@@ -1485,10 +1767,13 @@ static struct task *process_chk(struct task *t)
 		set_server_check_status(check, HCHK_STATUS_START, NULL);
 
 		check->state |= CHK_RUNNING;
-		check->bi->p = check->bi->data;
-		check->bi->i = 0;
-		check->bo->p = check->bo->data;
-		check->bo->o = 0;
+
+		if (has_conn) {
+			check->bi->p = check->bi->data;
+			check->bi->i = 0;
+			check->bo->p = check->bo->data;
+			check->bo->o = 0;
+		}
 
 		ret = establish_chk(t);
 		switch (ret) {
@@ -1503,7 +1788,9 @@ static struct task *process_chk(struct task *t)
 				int t_con = tick_add(now_ms, s->proxy->timeout.connect);
 				t->expire = tick_first(t->expire, t_con);
 			}
-			conn_data_poll_recv(conn);   /* prepare for reading a possible reply */
+			if (has_conn) {
+				conn_data_poll_recv(conn);   /* prepare for reading a possible reply */
+			}
 			goto reschedule;
 
 		case SN_ERR_SRVTO: /* ETIMEDOUT */
@@ -1541,15 +1828,15 @@ static struct task *process_chk(struct task *t)
 		 * First, let's check whether there was an uncaught error,
 		 * which can happen on connect timeout or error.
 		 */
-		if (s->check.result == SRV_CHK_UNKNOWN) {
-			if ((conn->flags & (CO_FL_CONNECTED|CO_FL_WAIT_L4_CONN)) == CO_FL_WAIT_L4_CONN) {
+		if (check->result == SRV_CHK_UNKNOWN) {
+			if (has_conn && (conn->flags & (CO_FL_CONNECTED|CO_FL_WAIT_L4_CONN)) == CO_FL_WAIT_L4_CONN) {
 				/* L4 not established (yet) */
 				if (conn->flags & CO_FL_ERROR)
 					set_server_check_status(check, HCHK_STATUS_L4CON, NULL);
 				else if (expired)
 					set_server_check_status(check, HCHK_STATUS_L4TOUT, NULL);
 			}
-			else if ((conn->flags & (CO_FL_CONNECTED|CO_FL_WAIT_L6_CONN)) == CO_FL_WAIT_L6_CONN) {
+			else if (has_conn && (conn->flags & (CO_FL_CONNECTED|CO_FL_WAIT_L6_CONN)) == CO_FL_WAIT_L6_CONN) {
 				/* L6 not established (yet) */
 				if (conn->flags & CO_FL_ERROR)
 					set_server_check_status(check, HCHK_STATUS_L6RSP, NULL);
@@ -1562,6 +1849,23 @@ static struct task *process_chk(struct task *t)
 					set_server_check_status(check, HCHK_STATUS_L6OK, NULL);
 				else
 					set_server_check_status(check, HCHK_STATUS_L4OK, NULL);
+			}
+			else if (!has_conn) {
+				struct pid_list *elem = check->curpid;
+				int status;
+
+				if (elem->exited) {
+					status = elem->status; /* Save in case the process exits between use below */
+					if (!WIFEXITED(status))
+						check->code = -1;
+					else
+						check->code = WEXITSTATUS(status);
+					if (!WIFEXITED(status) || WEXITSTATUS(status))
+						status = HCHK_STATUS_PROCERR;
+					else
+						status = HCHK_STATUS_PROCOK;
+					set_server_check_status(check, status, NULL);
+				}
 			}
 			else if (expired) {
 				/* connection established but expired check */
@@ -1576,7 +1880,7 @@ static struct task *process_chk(struct task *t)
 		}
 
 		/* check complete or aborted */
-		if (conn->xprt) {
+		if (has_conn && conn->xprt) {
 			/* The check was aborted and the connection was not yet closed.
 			 * This can happen upon timeout, or when an external event such
 			 * as a failed response coupled with "observe layer7" caused the
@@ -1600,6 +1904,9 @@ static struct task *process_chk(struct task *t)
 			process_result(&check->server->agent);
 		}
 
+		if (!has_conn)
+			pid_list_del(check->curpid);
+
 		rv = 0;
 		if (global.spread_checks > 0) {
 			rv = srv_getinter(check) * global.spread_checks / 100;
@@ -1614,7 +1921,6 @@ static struct task *process_chk(struct task *t)
  out_wait:
 	return t;
 }
-
 static int start_check_task(struct check *check, int mininter,
 			    int nbcheck, int srvpos)
 {
@@ -1683,6 +1989,13 @@ int start_checks() {
 	 * the number of servers, weighted by the server's position in the list.
 	 */
 	for (px = proxy; px; px = px->next) {
+		if ((px->options2 & PR_O2_CHK_ANY) == PR_O2_EXT_CHK) {
+			if (init_pid_list()) {
+				Alert("Starting [%s] check: out of memory.\n", px->id);
+				return -1;
+			}
+		}
+
 		for (s = px->srv; s; s = s->next) {
 			if (s->slowstart) {
 				if ((t = task_new()) == NULL) {
