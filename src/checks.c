@@ -27,6 +27,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 
 #include <common/compat.h>
 #include <common/config.h>
@@ -1591,7 +1592,10 @@ static int establish_proc_chk(struct task *t)
 	}
 	if (pid == 0) {
 		/* Child */
-		exit(0);
+		execvp(s->proxy->check_req, s->check_argv);
+		Alert("Failed to exec process for external health check: %s. Aborting.\n",
+		      strerror(errno));
+		exit(-1);
 	}
 
 	/* Parent */
@@ -1837,8 +1841,18 @@ int start_checks() {
 	 * the number of servers, weighted by the server's position in the list.
 	 */
 	for (px = proxy; px; px = px->next) {
+		char *proxy_host = NULL;
+		char *proxy_serv = NULL;
+
 		if ((px->options2 & PR_O2_CHK_ANY) == PR_O2_EXT_CHK) {
-			if (init_pid_list()) {
+			char host[NI_MAXHOST] = {};
+			char serv[NI_MAXSERV] = {};
+			assert(!getnameinfo((struct sockaddr *)&px->listen->addr, sizeof(px->listen->addr),
+					    host, sizeof(host), serv, sizeof(serv), NI_NUMERICHOST | NI_NUMERICSERV));
+			proxy_host = strdup(host);
+			proxy_serv = strdup(serv);
+			printf("proxy_host=%p\n", proxy_host);
+			if (init_pid_list() || !proxy_host || !proxy_serv) {
 				Alert("Starting [%s] check: out of memory.\n", px->id);
 				return -1;
 			}
@@ -1871,6 +1885,42 @@ int start_checks() {
 			s->check = t;
 			t->process = process_chk;
 			t->context = s;
+			if ((px->options2 & PR_O2_CHK_ANY) == PR_O2_EXT_CHK) {
+				char host[NI_MAXHOST] = {};
+				char serv[NI_MAXSERV] = {};
+				char *server_host, *server_serv;
+				struct sockaddr_storage sa;
+				int status;
+
+				if (is_addr(&s->check_addr))
+					sa = s->check_addr;
+				else
+					sa = s->addr;
+				set_host_port(&sa, s->check_port);
+				sa = s->addr;
+
+				status = getnameinfo((struct sockaddr *)&s->addr, sizeof(sa),
+					        host, sizeof(host), serv, sizeof(serv), NI_NUMERICHOST | NI_NUMERICSERV);
+				assert(getnameinfo((struct sockaddr *)&sa, sizeof(sa),
+						   host, sizeof(host), serv, sizeof(serv), NI_NUMERICHOST | NI_NUMERICSERV) == 0);
+
+				server_host = strdup(host);
+				server_serv = strdup(serv);
+				s->check_argv = malloc(6 * sizeof(s->check_argv));
+				if (!s->check_argv || !server_host || !server_serv) {
+					Alert("Starting [%s:%s] check: out of memory.\n", px->id, s->id);
+					return -1;
+				}
+
+				*s->check_argv = px->check_req;
+				*(s->check_argv + 1) = proxy_host;
+				*(s->check_argv + 2) = proxy_serv;
+				*(s->check_argv + 3) = server_host;
+				*(s->check_argv + 4) = server_serv;
+				*(s->check_argv + 5) = NULL;
+
+				s->curpid = NULL;
+			}
 
 			/* check this every ms */
 			t->expire = tick_add(now_ms,

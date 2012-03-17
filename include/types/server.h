@@ -124,6 +124,7 @@ struct server {
 	char *trackit;				/* temporary variable to make assignment deferrable */
 	struct sockaddr_storage check_addr;	/* the address to check, if different from <addr> */
 	short check_port;			/* the port to use for the health checks */
+	char **check_argv;			/* the arguments to use if running a process-based check */
 	int health;				/* 0->rise-1 = bad; rise->rise+fall-1 = good */
 	int consecutive_errors;			/* current number of consecutive errors */
 	int rise, fall;				/* time in iterations */
