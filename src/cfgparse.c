@@ -3548,6 +3548,22 @@ stats_error_parsing:
 			memcpy(curproxy->check_req, DEF_LDAP_CHECK_REQ, sizeof(DEF_LDAP_CHECK_REQ) - 1);
 			curproxy->check_len = sizeof(DEF_LDAP_CHECK_REQ) - 1;
 		}
+		else if (!strcmp(args[1], "external-check")) {
+			/* excute an external command to check servers' health */
+			free(curproxy->check_req);
+			curproxy->check_req = NULL;
+			curproxy->options2 &= ~PR_O2_CHK_ANY;
+			curproxy->options2 |= PR_O2_EXT_CHK;
+
+			if (!*(args[2])) {
+				Alert("parsing [%s:%d] : '%s' expects command as argument.\n",
+				      file, linenum, args[0]);
+				err_code |= ERR_ALERT | ERR_FATAL;
+				goto out;
+			}
+			curproxy->check_req = strdup(args[2]);
+			curproxy->check_len = strlen(curproxy->check_req);
+		}
 		else if (!strcmp(args[1], "forwardfor")) {
 			int cur_arg;
 
