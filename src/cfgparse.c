@@ -3577,6 +3577,13 @@ stats_error_parsing:
 				}
 			}
 		}
+		else if (!strcmp(args[1], "dynamic-chk")) {
+			/* use dynmaic health check */
+			free(curproxy->check_req);
+			curproxy->check_req = NULL;
+			curproxy->options2 &= ~PR_O2_CHK_ANY;
+			curproxy->options2 |= PR_O2_FEEDBACK_CHK;
+		}
 		else if (!strcmp(args[1], "pgsql-check")) {
 			/* use PostgreSQL request to check servers' health */
 			if (warnifnotcap(curproxy, PR_CAP_BE, file, linenum, args[1], NULL))

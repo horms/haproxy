@@ -983,7 +983,7 @@ err:
 
 int process_weight_change_request(struct server *sv, const char *weight_str)
 {
-	stats_sock_parse_weight_change_request(NULL, sv, weight_str);
+	return stats_sock_parse_weight_change_request(NULL, sv, weight_str);
 }
 
 /* Processes the stats interpreter on the statistics socket. This function is

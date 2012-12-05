@@ -25,6 +25,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
+#include <stdbool.h>
 
 #include <common/chunk.h>
 #include <common/compat.h>
@@ -37,6 +38,7 @@
 
 #include <proto/backend.h>
 #include <proto/checks.h>
+#include <proto/dumpstats.h>
 #include <proto/fd.h>
 #include <proto/log.h>
 #include <proto/queue.h>
@@ -965,6 +967,32 @@ static void event_srv_chk_r(struct connection *conn)
 		else
 			set_server_check_status(s, HCHK_STATUS_L7STS, desc);
 		break;
+
+	case PR_O2_FEEDBACK_CHK: {
+		short status = HCHK_STATUS_L7RSP;
+
+		if (!done)
+			goto wait_more_data;
+
+		cut_crlf(s->check.bi->data);
+
+		if (s->check.bi->i > 0 &&
+		    isdigit((unsigned char) *s->check.bi->data) &&
+		    strchr(s->check.bi->data, '%')) {
+			if (!process_weight_change_request(s, s->check.bi->data))
+			    status = HCHK_STATUS_L7OKD;
+		} else if (!strncasecmp(s->check.bi->data, "drain", s->check.bi->i)) {
+			if (!process_weight_change_request(s, "0%"))
+			    status = HCHK_STATUS_L7OKD;
+		} else if (!strncasecmp(s->check.bi->data, "disable", s->check.bi->i)) {
+			s->state |= SRV_MAINTAIN;
+			s->health = s->rise;
+			status = HCHK_STATUS_L7STS;
+		}
+
+		set_server_check_status(s, status, s->check.bi->data);
+		break;
+	}
 
 	case PR_O2_PGSQL_CHK:
 		if (!done && s->check.bi->i < 9)
