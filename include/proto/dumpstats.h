@@ -58,6 +58,7 @@ extern struct si_applet http_stats_applet;
 
 void stats_io_handler(struct stream_interface *si);
 
+int process_weight_change_request(struct server *sv, const char *weight_str);
 
 #endif /* _PROTO_DUMPSTATS_H */
 

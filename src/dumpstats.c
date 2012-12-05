@@ -896,6 +896,91 @@ static struct server *expect_server_admin(struct session *s, struct stream_inter
 	return sv;
 }
 
+static int stats_sock_parse_weight_change_request(struct stream_interface *si,
+						  struct server *sv, const char *weight_str)
+{
+	const char *warning;
+	unsigned int status;
+	struct proxy *px;
+	int w;
+
+	px = sv->proxy;
+
+	/* if the weight is terminated with '%', it is set relative to
+	 * the initial weight, otherwise it is absolute.
+	 */
+	if (!*weight_str) {
+		warning = "Require <weight> or <weight%>.\n";
+		status = STAT_CLI_PRINT;
+		goto err;
+	}
+
+	w = atoi(weight_str);
+	if (strchr(weight_str, '%') != NULL) {
+		if (w < 0 || w > 100) {
+			warning = "Relative weight must be positive.\n";
+			status = STAT_CLI_PRINT;
+			goto err;
+		}
+		w = sv->iweight * w / 100;
+	}
+	else {
+		if (w < 0 || w > 256) {
+			warning = "Absolute weight can only be between 0 and 256 inclusive.\n";
+			status = STAT_CLI_PRINT;
+			goto err;
+		}
+	}
+
+	if (w && w != sv->iweight && !(px->lbprm.algo & BE_LB_PROP_DYN)) {
+		warning = "Backend is using a static LB algorithm and only accepts weights '0%' and '100%'.\n";
+		status = STAT_CLI_PRINT;
+		goto err;
+	}
+
+	sv->uweight = w;
+
+	if (px->lbprm.algo & BE_LB_PROP_DYN) {
+	/* we must take care of not pushing the server to full throttle during slow starts */
+		if ((sv->state & SRV_WARMINGUP) && (px->lbprm.algo & BE_LB_PROP_DYN))
+			sv->eweight = (BE_WEIGHT_SCALE * (now.tv_sec - sv->last_change) + sv->slowstart - 1) / sv->slowstart;
+		else
+			sv->eweight = BE_WEIGHT_SCALE;
+		sv->eweight *= sv->uweight;
+	} else {
+		sv->eweight = sv->uweight;
+	}
+
+	/* static LB algorithms are a bit harder to update */
+	if (px->lbprm.update_server_eweight)
+		px->lbprm.update_server_eweight(sv);
+	else if (sv->eweight) {
+		if (px->lbprm.set_server_status_up)
+			px->lbprm.set_server_status_up(sv);
+	}
+	else {
+		if (px->lbprm.set_server_status_down)
+			px->lbprm.set_server_status_down(sv);
+	}
+
+	return 0;
+
+err:
+	if (si) {
+		si->applet.ctx.cli.msg = warning;
+		si->applet.st0 = status;
+	} else {
+		Warning("%s\n", warning);
+	}
+	return 1;
+
+}
+
+int process_weight_change_request(struct server *sv, const char *weight_str)
+{
+	stats_sock_parse_weight_change_request(NULL, sv, weight_str);
+}
+
 /* Processes the stats interpreter on the statistics socket. This function is
  * called from an applet running in a stream interface. The function returns 1
  * if the request was understood, otherwise zero. It sets si->applet.st0 to a value
@@ -1089,72 +1174,13 @@ static int stats_sock_parse_request(struct stream_interface *si, char *line)
 	}
 	else if (strcmp(args[0], "set") == 0) {
 		if (strcmp(args[1], "weight") == 0) {
-			struct proxy *px;
 			struct server *sv;
-			int w;
 
 			sv = expect_server_admin(s, si, args[2]);
 			if (!sv)
 				return 1;
-			px = sv->proxy;
 
-			/* if the weight is terminated with '%', it is set relative to
-			 * the initial weight, otherwise it is absolute.
-			 */
-			if (!*args[3]) {
-				si->applet.ctx.cli.msg = "Require <weight> or <weight%>.\n";
-				si->applet.st0 = STAT_CLI_PRINT;
-				return 1;
-			}
-
-			w = atoi(args[3]);
-			if (strchr(args[3], '%') != NULL) {
-				if (w < 0 || w > 100) {
-					si->applet.ctx.cli.msg = "Relative weight can only be set between 0 and 100% inclusive.\n";
-					si->applet.st0 = STAT_CLI_PRINT;
-					return 1;
-				}
-				w = sv->iweight * w / 100;
-			}
-			else {
-				if (w < 0 || w > 256) {
-					si->applet.ctx.cli.msg = "Absolute weight can only be between 0 and 256 inclusive.\n";
-					si->applet.st0 = STAT_CLI_PRINT;
-					return 1;
-				}
-			}
-
-			if (w && w != sv->iweight && !(px->lbprm.algo & BE_LB_PROP_DYN)) {
-				si->applet.ctx.cli.msg = "Backend is using a static LB algorithm and only accepts weights '0%' and '100%'.\n";
-				si->applet.st0 = STAT_CLI_PRINT;
-				return 1;
-			}
-
-			sv->uweight = w;
-
-			if (px->lbprm.algo & BE_LB_PROP_DYN) {
-			/* we must take care of not pushing the server to full throttle during slow starts */
-				if ((sv->state & SRV_WARMINGUP) && (px->lbprm.algo & BE_LB_PROP_DYN))
-					sv->eweight = (BE_WEIGHT_SCALE * (now.tv_sec - sv->last_change) + sv->slowstart - 1) / sv->slowstart;
-				else
-					sv->eweight = BE_WEIGHT_SCALE;
-				sv->eweight *= sv->uweight;
-			} else {
-				sv->eweight = sv->uweight;
-			}
-
-			/* static LB algorithms are a bit harder to update */
-			if (px->lbprm.update_server_eweight)
-				px->lbprm.update_server_eweight(sv);
-			else if (sv->eweight) {
-				if (px->lbprm.set_server_status_up)
-					px->lbprm.set_server_status_up(sv);
-			}
-			else {
-				if (px->lbprm.set_server_status_down)
-					px->lbprm.set_server_status_down(sv);
-			}
-
+			stats_sock_parse_weight_change_request(si, sv, args[3]);
 			return 1;
 		}
 		else if (strcmp(args[1], "timeout") == 0) {
