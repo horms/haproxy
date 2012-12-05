@@ -942,7 +942,7 @@ static int stats_sock_parse_weight_change_request(struct stream_interface *si,
 
 	if (px->lbprm.algo & BE_LB_PROP_DYN) {
 	/* we must take care of not pushing the server to full throttle during slow starts */
-		if ((sv->state & SRV_WARMINGUP) && (px->lbprm.algo & BE_LB_PROP_DYN))
+		if ((sv->state & SRV_WARMINGUP))
 			sv->eweight = (BE_WEIGHT_SCALE * (now.tv_sec - sv->last_change) + sv->slowstart - 1) / sv->slowstart;
 		else
 			sv->eweight = BE_WEIGHT_SCALE;
