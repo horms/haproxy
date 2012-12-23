@@ -917,12 +917,17 @@ static int stats_sock_parse_weight_change_request(struct stream_interface *si,
 
 	w = atoi(weight_str);
 	if (strchr(weight_str, '%') != NULL) {
-		if (w < 0 || w > 100) {
+		if (w < 0) {
 			warning = "Relative weight must be positive.\n";
 			status = STAT_CLI_PRINT;
 			goto err;
 		}
+		/* Avoid integer overflow */
+		if (w > 25600)
+			w = 25600;
 		w = sv->iweight * w / 100;
+		if (w > 256)
+			w = 256;
 	}
 	else {
 		if (w < 0 || w > 256) {
