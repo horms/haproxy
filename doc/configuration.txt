@@ -3944,10 +3944,10 @@ option lb-agent-chk
 
     This currently has the same behaviour as down (iii).
 
-  The use of an alternate check-port, used to obtain agent heath check
-  information described above as opposed to the port of the service, may be
-  useful in conjunction with this option.
-
+  The use of the port parameter to a server may in conjunction with this
+  option be used to set the TCP port used to obtain agent heath check
+  information described above. Otherwise the port of the serivce will be
+  used.
 
 option ldap-check
   Use LDAPv3 health checks for server testing
