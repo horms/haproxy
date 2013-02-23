@@ -191,6 +191,7 @@ struct server {
 	} check_common;
 
 	struct check check;                     /* health-check specific configuration */
+	struct check agent;                     /* agent specific configuration */
 
 #ifdef USE_OPENSSL
 	int use_ssl;				/* ssl enabled */
