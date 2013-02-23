@@ -1620,6 +1620,34 @@ out:
 	return err_code;
 }
 
+static int init_check(struct server *s, struct check *check, const char * file, int linenum)
+{
+	/* Allocate buffer for requests... */
+	if ((check->bi = calloc(sizeof(struct buffer) + global.tune.chksize, sizeof(char))) == NULL) {
+		Alert("parsing [%s:%d] : out of memory while allocating check buffer.\n", file, linenum);
+		return ERR_ALERT | ERR_ABORT;
+	}
+	check->bi->size = global.tune.chksize;
+
+	/* Allocate buffer for responses... */
+	if ((check->bo = calloc(sizeof(struct buffer) + global.tune.chksize, sizeof(char))) == NULL) {
+		Alert("parsing [%s:%d] : out of memory while allocating check buffer.\n", file, linenum);
+		return ERR_ALERT | ERR_ABORT;
+	}
+	check->bo->size = global.tune.chksize;
+
+	/* Allocate buffer for partial results... */
+	if ((check->conn = calloc(1, sizeof(struct connection))) == NULL) {
+		Alert("parsing [%s:%d] : out of memory while allocating check connection.\n", file, linenum);
+		return ERR_ALERT | ERR_ABORT;
+	}
+
+	check->conn->t.sock.fd = -1; /* no agent in progress yet */
+	check->status = HCHK_STATUS_INI;
+	check->server = s;
+
+	return 0;
+}
 
 int cfg_parse_listen(const char *file, int linenum, char **args, int kwm)
 {
@@ -4790,6 +4818,8 @@ stats_error_parsing:
 		}
 
 		if (do_check) {
+			int ret;
+
 			if (newsrv->trackit) {
 				Alert("parsing [%s:%d]: unable to enable checks and tracking at the same time!\n",
 					file, linenum);
@@ -4835,32 +4865,12 @@ stats_error_parsing:
 				goto out;
 			}
 
-			/* Allocate buffer for check requests... */
-			if ((newsrv->check.bi = calloc(sizeof(struct buffer) + global.tune.chksize, sizeof(char))) == NULL) {
-				Alert("parsing [%s:%d] : out of memory while allocating check buffer.\n", file, linenum);
-				err_code |= ERR_ALERT | ERR_ABORT;
-				goto out;
-			}
-			newsrv->check.bi->size = global.tune.chksize;
-
-			/* Allocate buffer for check responses... */
-			if ((newsrv->check.bo = calloc(sizeof(struct buffer) + global.tune.chksize, sizeof(char))) == NULL) {
-				Alert("parsing [%s:%d] : out of memory while allocating check buffer.\n", file, linenum);
-				err_code |= ERR_ALERT | ERR_ABORT;
-				goto out;
-			}
-			newsrv->check.bo->size = global.tune.chksize;
-
-			/* Allocate buffer for partial check results... */
-			if ((newsrv->check.conn = calloc(1, sizeof(struct connection))) == NULL) {
-				Alert("parsing [%s:%d] : out of memory while allocating check connection.\n", file, linenum);
-				err_code |= ERR_ALERT | ERR_ABORT;
+			ret = init_check(newsrv, &newsrv->check, file, linenum);
+			if (ret) {
+				err_code |= ret;
 				goto out;
 			}
 
-			newsrv->check.conn->t.sock.fd = -1; /* no check in progress yet */
-			newsrv->check.status = HCHK_STATUS_INI;
-			newsrv->check.server = newsrv;
 			newsrv->state |= SRV_CHECKED;
 		}
 
