@@ -777,11 +777,12 @@ nosplice
   "option splice-response".
 
 spread-checks <0..50, in percent>
-  Sometimes it is desirable to avoid sending health checks to servers at exact
-  intervals, for instance when many logical servers are located on the same
-  physical server. With the help of this parameter, it becomes possible to add
-  some randomness in the check interval between 0 and +/- 50%. A value between
-  2 and 5 seems to show good results. The default value remains at 0.
+  Sometimes it is desirable to avoid sending agent and health checks to
+  servers at exact intervals, for instance when many logical servers are
+  located on the same physical server. With the help of this parameter, it
+  becomes possible to add some randomness in the check interval between 0
+  and +/- 50%. A value between 2 and 5 seems to show good results. The
+  default value remains at 0.
 
 tune.bufsize <number>
   Sets the buffer size to this size (in bytes). Lower values allow more
@@ -3948,6 +3949,9 @@ option lb-agent-chk
   option be used to set the TCP port used to obtain agent heath check
   information described above. Otherwise the port of the serivce will be
   used.
+
+  This option conflicts with the agent-port parameter to a server.
+
 
 option ldap-check
   Use LDAPv3 health checks for server testing
@@ -7648,6 +7652,43 @@ addr <ipv4|ipv6>
 
   Supported in default-server: No
 
+agent-inter <delay>
+  The "agent-inter" parameter sets the interval between two agent checks
+  to <delay> milliseconds. If left unspecified, the delay defaults to 2000 ms.
+
+  Just as with every other time-based parameter, it may be entered in any
+  other explicit unit among { us, ms, s, m, h, d }. The "agent-inter"
+  parameter also serves as a timeout for agent checks "timeout check" is
+  not set. In order to reduce "resonance" effects when multiple servers are
+  hosted on the same hardware, the agent and health checks of all servers
+  are started with a small time offset between them. It is also possible to
+  add some random noise in the agent and health checks interval using the
+  global "spread-checks" keyword. This makes sense for instance when a lot
+  of backends use the same servers.
+
+  Requires the "agent-port" parameter to be set.
+
+  Supported in default-server: Yes
+
+agent-port <port>
+  Using the "agent-port" parameter, it becomes possible to run an agent
+  check in conjunction with a regular health check. In this scenario the
+  "agent-port" parameter specifies the TCP that an agent check should
+  connect to. Typically this is different to the port of the service and
+  health-check.
+
+  For a description agent checks and the protocol used by them see the
+  description of "lb-agent-check".
+
+  In this the agent check is run in conjunction with another check
+  and as such the check backend should be set to some value other than
+  "lb-agent-check". An alternative scenario is to run only an agent check
+  in which case the check backend should be set to "lb-agent-check" and
+  "agent-port" should not be set; in that scenario the port may be set
+  using the "port" parameter.
+
+  See also the "agent-inter" parameter.
+
 backup
   When "backup" is present on a server line, the server is only used in load
   balancing when all other non-backup servers are unavailable. Requests coming
@@ -7824,11 +7865,11 @@ downinter <delay>
   other explicit unit among { us, ms, s, m, h, d }. The "inter" parameter also
   serves as a timeout for health checks sent to servers if "timeout check" is
   not set. In order to reduce "resonance" effects when multiple servers are
-  hosted on the same hardware, the health-checks of all servers are started
-  with a small time offset between them. It is also possible to add some random
-  noise in the health checks interval using the global "spread-checks"
-  keyword. This makes sense for instance when a lot of backends use the same
-  servers.
+  hosted on the same hardware, the agent and health checks of all servers
+  are started with a small time offset between them. It is also possible to
+  add some random noise in the agent and health checks interval using the
+  global "spread-checks" keyword. This makes sense for instance when a lot
+  of backends use the same servers.
 
   Supported in default-server: Yes
 
