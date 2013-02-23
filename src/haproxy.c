@@ -1119,6 +1119,10 @@ void deinit(void)
 				task_delete(s->check.task);
 				task_free(s->check.task);
 			}
+			if (s->agent.task) {
+				task_delete(s->agent.task);
+				task_free(s->agent.task);
+			}
 
 			if (s->warmup) {
 				task_delete(s->warmup);
@@ -1129,6 +1133,8 @@ void deinit(void)
 			free(s->cookie);
 			free(s->check.bi);
 			free(s->check.bo);
+			free(s->agent.bi);
+			free(s->agent.bo);
 			free(s);
 			s = s_next;
 		}/* end while(s) */
