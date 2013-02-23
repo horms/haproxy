@@ -1325,9 +1325,13 @@ void init_default_instance()
 	defproxy.defsrv.check.inter = DEF_CHKINTR;
 	defproxy.defsrv.check.fastinter = 0;
 	defproxy.defsrv.check.downinter = 0;
+	defproxy.defsrv.agent.inter = DEF_CHKINTR;
+	defproxy.defsrv.agent.fastinter = 0;
+	defproxy.defsrv.agent.downinter = 0;
 	defproxy.defsrv.rise = DEF_RISETIME;
 	defproxy.defsrv.fall = DEF_FALLTIME;
 	defproxy.defsrv.check.port = 0;
+	defproxy.defsrv.agent.port = 0;
 	defproxy.defsrv.maxqueue = 0;
 	defproxy.defsrv.minconn = 0;
 	defproxy.defsrv.maxconn = 0;
@@ -4135,7 +4139,7 @@ stats_error_parsing:
 	else if (!strcmp(args[0], "server") || !strcmp(args[0], "default-server")) {  /* server address */
 		int cur_arg;
 		short realport = 0;
-		int do_check = 0, defsrv = (*args[0] == 'd');
+		int do_agent = 0, do_check = 0, defsrv = (*args[0] == 'd');
 
 		if (!defsrv && curproxy == &defproxy) {
 			Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
@@ -4182,6 +4186,7 @@ stats_error_parsing:
 			LIST_INIT(&newsrv->actconns);
 			LIST_INIT(&newsrv->pendconns);
 			do_check = 0;
+			do_agent = 0;
 			newsrv->state = SRV_RUNNING; /* early server setup */
 			newsrv->last_change = now.tv_sec;
 			newsrv->id = strdup(args[1]);
@@ -4235,11 +4240,16 @@ stats_error_parsing:
 				goto out;
 			}
 
-			newsrv->check.use_ssl = curproxy->defsrv.check.use_ssl;
+			newsrv->check.use_ssl	= curproxy->defsrv.check.use_ssl;
 			newsrv->check.port	= curproxy->defsrv.check.port;
 			newsrv->check.inter	= curproxy->defsrv.check.inter;
 			newsrv->check.fastinter	= curproxy->defsrv.check.fastinter;
 			newsrv->check.downinter	= curproxy->defsrv.check.downinter;
+			newsrv->agent.use_ssl	= curproxy->defsrv.agent.use_ssl;
+			newsrv->agent.port	= curproxy->defsrv.agent.port;
+			newsrv->agent.inter	= curproxy->defsrv.agent.inter;
+			newsrv->agent.fastinter	= curproxy->defsrv.agent.fastinter;
+			newsrv->agent.downinter	= curproxy->defsrv.agent.downinter;
 			newsrv->rise		= curproxy->defsrv.rise;
 			newsrv->fall		= curproxy->defsrv.fall;
 			newsrv->maxqueue	= curproxy->defsrv.maxqueue;
@@ -4261,6 +4271,12 @@ stats_error_parsing:
 			newsrv->check.name	= "Health";
 			newsrv->check.server	= newsrv;
 
+			newsrv->agent.status	= HCHK_STATUS_INI;
+			newsrv->agent.health	= newsrv->rise;	/* up, but will fall down at first failure */
+			newsrv->agent.type	= PR_O2_LB_AGENT_CHK;
+			newsrv->agent.name	= "Agent";
+			newsrv->agent.server	= newsrv;
+
 			cur_arg = 3;
 		} else {
 			newsrv = &curproxy->defsrv;
@@ -4268,7 +4284,30 @@ stats_error_parsing:
 		}
 
 		while (*args[cur_arg]) {
-			if (!defsrv && !strcmp(args[cur_arg], "cookie")) {
+			if (!strcmp(args[cur_arg], "agent-inter")) {
+				const char *err = parse_time_err(args[cur_arg + 1], &val, TIME_UNIT_MS);
+				if (err) {
+					Alert("parsing [%s:%d] : unexpected character '%c' in 'agent-inter' argument of server %s.\n",
+					      file, linenum, *err, newsrv->id);
+					err_code |= ERR_ALERT | ERR_FATAL;
+					goto out;
+				}
+				if (val <= 0) {
+					Alert("parsing [%s:%d]: invalid value %d for argument '%s' of server %s.\n",
+					      file, linenum, val, args[cur_arg], newsrv->id);
+					err_code |= ERR_ALERT | ERR_FATAL;
+					goto out;
+				}
+				newsrv->agent.inter = val;
+				cur_arg += 2;
+			}
+			else if (!strcmp(args[cur_arg], "agent-port")) {
+				global.maxsock++;
+				newsrv->agent.port = atol(args[cur_arg + 1]);
+				do_agent = 1;
+				cur_arg += 2;
+			}
+			else if (!defsrv && !strcmp(args[cur_arg], "cookie")) {
 				newsrv->cookie = strdup(args[cur_arg + 1]);
 				newsrv->cklen = strlen(args[cur_arg + 1]);
 				cur_arg += 2;
@@ -4296,6 +4335,8 @@ stats_error_parsing:
 
 				if (newsrv->check.health)
 					newsrv->check.health = newsrv->rise;
+				if (newsrv->agent.health)
+					newsrv->agent.health = newsrv->rise;
 				cur_arg += 2;
 			}
 			else if (!strcmp(args[cur_arg], "fall")) {
@@ -4477,6 +4518,7 @@ stats_error_parsing:
 				newsrv->state |= SRV_MAINTAIN;
 				newsrv->state &= ~SRV_RUNNING;
 				newsrv->check.health = 0;
+				newsrv->agent.health = 0;
 				cur_arg += 1;
 			}
 			else if (!defsrv && !strcmp(args[cur_arg], "observe")) {
@@ -4874,6 +4916,33 @@ stats_error_parsing:
 			}
 
 			newsrv->state |= SRV_CHECKED;
+		}
+
+		if (do_agent && do_check) {
+			int ret;
+
+			if (!newsrv->agent.port) {
+				Alert("parsing [%s:%d] : server %s has agent-inter without agent-port.\n",
+				      file, linenum, newsrv->id);
+				err_code |= ERR_ALERT | ERR_FATAL;
+				goto out;
+			}
+
+			if ((newsrv->proxy->options2 & PR_O2_CHK_ANY) == PR_O2_LB_AGENT_CHK) {
+				Alert("parsing [%s:%d] : server %s has agent-inter or agent-port but check type is lb-agent-chk.\n",
+				      file, linenum, newsrv->id);
+				err_code |= ERR_ALERT | ERR_FATAL;
+				goto out;
+			}
+
+			if (!newsrv->agent.inter)
+				newsrv->agent.inter = newsrv->check.inter;
+
+			ret = init_check(newsrv, &newsrv->agent, file, linenum);
+			if (ret) {
+				err_code |= ret;
+				goto out;
+			}
 		}
 
 		if (!defsrv) {
@@ -6765,6 +6834,7 @@ out_uri_auth_compat:
 					newsrv->state |= SRV_MAINTAIN;
 					newsrv->state &= ~SRV_RUNNING;
 					newsrv->check.health = 0;
+					newsrv->agent.health = 0;
 				}
 
 				newsrv->track = srv;
