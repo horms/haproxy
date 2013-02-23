@@ -1351,14 +1351,14 @@ static struct task *process_chk(struct task *t)
 		conn->flags = CO_FL_NONE;
 		conn->err_code = CO_ER_NONE;
 		conn->target = &s->obj_type;
-		conn_prepare(conn, &check_conn_cb, s->check.proto, s->check.xprt, s);
+		conn_prepare(conn, &check_conn_cb, s->check_common.proto, s->check_common.xprt, s);
 
 		/* no client address */
 		clear_addr(&conn->addr.from);
 
-		if (is_addr(&s->check.addr))
+		if (is_addr(&s->check_common.addr))
 			/* we'll connect to the check addr specified on the server */
-			conn->addr.to = s->check.addr;
+			conn->addr.to = s->check_common.addr;
 		else
 			/* we'll connect to the addr on the server */
 			conn->addr.to = s->addr;
@@ -1377,9 +1377,9 @@ static struct task *process_chk(struct task *t)
 		 * connect() when a pure TCP check is used (without PROXY protocol).
 		 */
 		ret = SN_ERR_INTERNAL;
-		if (s->check.proto->connect)
-			ret = s->check.proto->connect(conn, s->proxy->options2 & PR_O2_CHK_ANY,
-		                                      s->check.send_proxy ? 1 : (s->proxy->options2 & PR_O2_CHK_ANY) ? 0 : 2);
+		if (s->check_common.proto->connect)
+			ret = s->check_common.proto->connect(conn, s->proxy->options2 & PR_O2_CHK_ANY,
+							     s->check.send_proxy ? 1 : (s->proxy->options2 & PR_O2_CHK_ANY) ? 0 : 2);
 		conn->flags |= CO_FL_WAKE_DATA;
 		if (s->check.send_proxy)
 			conn->flags |= CO_FL_LOCAL_SPROXY;
