@@ -4120,8 +4120,8 @@ stats_error_parsing:
 			}
 
 			newsrv->addr = *sk;
-			newsrv->proto = newsrv->check.proto = protocol_by_family(newsrv->addr.ss_family);
-			newsrv->xprt  = newsrv->check.xprt  = &raw_sock;
+			newsrv->proto = newsrv->check_common.proto = protocol_by_family(newsrv->addr.ss_family);
+			newsrv->xprt  = newsrv->check_common.xprt  = &raw_sock;
 
 			if (!newsrv->proto) {
 				Alert("parsing [%s:%d] : Unknown protocol family %d '%s'\n",
@@ -4130,7 +4130,7 @@ stats_error_parsing:
 				goto out;
 			}
 
-			newsrv->check.use_ssl	= curproxy->defsrv.check.use_ssl;
+			newsrv->check.use_ssl = curproxy->defsrv.check.use_ssl;
 			newsrv->check.port	= curproxy->defsrv.check.port;
 			newsrv->inter		= curproxy->defsrv.inter;
 			newsrv->fastinter	= curproxy->defsrv.fastinter;
@@ -4277,7 +4277,7 @@ stats_error_parsing:
 					goto out;
 				}
 
-				newsrv->check.addr = *sk;
+				newsrv->check_common.addr = *sk;
 				cur_arg += 2;
 			}
 			else if (!strcmp(args[cur_arg], "port")) {
@@ -4692,15 +4692,15 @@ stats_error_parsing:
 			 * same as for the production traffic. Otherwise we use raw_sock by
 			 * default, unless one is specified.
 			 */
-			if (!newsrv->check.port && !is_addr(&newsrv->check.addr)) {
+			if (!newsrv->check.port && !is_addr(&newsrv->check_common.addr)) {
 #ifdef USE_OPENSSL
 				newsrv->check.use_ssl |= newsrv->use_ssl;
 #endif
 				newsrv->check.send_proxy |= (newsrv->state & SRV_SEND_PROXY);
 			}
-			/* try to get the port from check.addr if check.port not set */
+			/* try to get the port from check_core.addr if check.port not set */
 			if (!newsrv->check.port)
-				newsrv->check.port = get_host_port(&newsrv->check.addr);
+				newsrv->check.port = get_host_port(&newsrv->check_common.addr);
 
 			if (!newsrv->check.port)
 				newsrv->check.port = realport; /* by default */
@@ -4750,6 +4750,7 @@ stats_error_parsing:
 
 			newsrv->check.conn->t.sock.fd = -1; /* no check in progress yet */
 			newsrv->check.status = HCHK_STATUS_INI;
+			newsrv->check.server = newsrv;
 			newsrv->state |= SRV_CHECKED;
 		}
 
