@@ -399,7 +399,7 @@ void set_server_down(struct check *check)
 		check->health = s->rise;
 	}
 
-	if (check->health == s->rise || s->track) {
+	if ((s->state & SRV_RUNNING && check->health == s->rise) || s->track) {
 		int srv_was_paused = s->state & SRV_GOINGDOWN;
 		int prev_srv_count = s->proxy->srv_bck + s->proxy->srv_act;
 
@@ -466,7 +466,8 @@ void set_server_up(struct check *check) {
 		check->health = s->rise;
 	}
 
-	if (check->health == s->rise || s->track) {
+	if ((s->check.health >= s->rise && s->agent.health >= s->rise &&
+	     check->health == s->rise) || s->track) {
 		if (s->proxy->srv_bck == 0 && s->proxy->srv_act == 0) {
 			if (s->proxy->last_change < now.tv_sec)		// ignore negative times
 				s->proxy->down_time += now.tv_sec - s->proxy->last_change;
@@ -1603,9 +1604,17 @@ int start_checks() {
 			if (!(s->state & SRV_CHECKED))
 				continue;
 
+			/* A task for the primary check */
 			s->check.type = s->proxy->options2 & PR_O2_CHK_ANY;
 			if (start_check_task(&s->check, mininter, nbcheck, srvpos++))
 				return -1;
+
+			/* A task for a secondary agent check */
+			if (s->agent.port) {
+				s->agent.type = PR_O2_LB_AGENT_CHK;
+				if (start_check_task(&s->agent, mininter, nbcheck, srvpos++))
+					return -1;
+			}
 		}
 	}
 	return 0;
