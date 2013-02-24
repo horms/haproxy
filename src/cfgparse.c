@@ -4257,9 +4257,8 @@ stats_error_parsing:
 			newsrv->uweight = newsrv->iweight
 						= curproxy->defsrv.iweight;
 
-			newsrv->check.health = newsrv->rise;	/* up, but will fall down at first failure */
-
 			newsrv->check.status	= HCHK_STATUS_INI;
+			newsrv->check.health	= newsrv->rise;	/* up, but will fall down at first failure */
 			newsrv->check.name	= "Health";
 			newsrv->check.server	= newsrv;
 
