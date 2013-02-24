@@ -121,6 +121,7 @@ struct check {
 	int result;				/* health-check result : SRV_CHK_* */
 	int state;				/* health-check result : CHK_* */
 	int type;				/* Check type, one of PR_O2_*_CHK */
+	const char *name;			/* Name of check: "Health" or "Agent" */
 	struct server *server;			/* back-pointer to server */
 };
 
