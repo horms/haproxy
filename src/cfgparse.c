@@ -4260,6 +4260,7 @@ stats_error_parsing:
 			newsrv->health = newsrv->rise;	/* up, but will fall down at first failure */
 
 			newsrv->check.status	= HCHK_STATUS_INI;
+			newsrv->check.name	= "Health";
 			newsrv->check.server	= newsrv;
 
 			cur_arg = 3;
