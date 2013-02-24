@@ -120,6 +120,7 @@ struct check {
 	int inter, fastinter, downinter;        /* checks: time in milliseconds */
 	int result;				/* health-check result : SRV_CHK_* */
 	int state;				/* health-check result : CHK_* */
+	const char *name;			/* Name of check: "Health" or "Agent" */
 	struct server *server;			/* back-pointer to server */
 };
 

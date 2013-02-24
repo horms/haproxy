@@ -1620,7 +1620,7 @@ out:
 	return err_code;
 }
 
-static int init_check(struct server *s, struct check *check, const char * file, int linenum)
+static int init_check(struct server *s, const char *name, struct check *check, const char * file, int linenum)
 {
 	/* Allocate buffer for requests... */
 	if ((check->bi = calloc(sizeof(struct buffer) + global.tune.chksize, sizeof(char))) == NULL) {
@@ -1645,6 +1645,7 @@ static int init_check(struct server *s, struct check *check, const char * file, 
 	check->conn->t.sock.fd = -1; /* no agent in progress yet */
 	check->status = HCHK_STATUS_INI;
 	check->server = s;
+	check->name = name;
 
 	return 0;
 }
@@ -4865,7 +4866,7 @@ stats_error_parsing:
 				goto out;
 			}
 
-			ret = init_check(newsrv, &newsrv->check, file, linenum);
+			ret = init_check(newsrv, "Health", &newsrv->check, file, linenum);
 			if (ret) {
 				err_code |= ret;
 				goto out;
