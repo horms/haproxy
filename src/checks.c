@@ -1529,6 +1529,32 @@ static struct task *process_chk(struct task *t)
 	return t;
 }
 
+static int start_check_task(struct check *check, int mininter,
+			    int nbcheck, int srvpos)
+{
+	struct task *t;
+	/* task for the check */
+	if ((t = task_new()) == NULL) {
+		Alert("Starting [%s:%s] check: out of memory.\n",
+		      check->server->proxy->id, check->server->id);
+		return -1;
+	}
+
+	check->task = t;
+	t->process = process_chk;
+	t->context = check;
+
+	/* check this every ms */
+	t->expire = tick_add(now_ms,
+			     MS_TO_TICKS(((mininter &&
+					   mininter >= srv_getinter(check)) ?
+					  mininter : srv_getinter(check)) * srvpos / nbcheck));
+	check->start = now;
+	task_queue(t);
+
+	return 0;
+}
+
 /*
  * Start health-check.
  * Returns 0 if OK, -1 if error, and prints the error in this case.
@@ -1589,26 +1615,9 @@ int start_checks() {
 			if (!(s->state & SRV_CHECKED))
 				continue;
 
-			/* one task for the checks */
-			if ((t = task_new()) == NULL) {
-				Alert("Starting [%s:%s] check: out of memory.\n", px->id, s->id);
-				return -1;
-			}
-
-			s->check.task = t;
 			s->check.type = s->proxy->options2 & PR_O2_CHK_ANY;
-			t->process = process_chk;
-			t->context = &s->check;
-
-			/* check this every ms */
-			t->expire = tick_add(now_ms,
-					     MS_TO_TICKS(((mininter &&
-							   mininter >= srv_getinter(&s->check)) ?
-							  mininter : srv_getinter(&s->check)) * srvpos / nbcheck));
-			s->check.start = now;
-			task_queue(t);
-
-			srvpos++;
+			if (start_check_task(&s->check, mininter, nbcheck, srvpos++))
+				return -1;
 		}
 	}
 	return 0;
