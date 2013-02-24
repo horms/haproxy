@@ -692,8 +692,8 @@ void health_adjust(struct server *s, short status)
 	s->consecutive_errors = 0;
 	s->counters.failed_hana++;
 
-	if (s->fastinter) {
-		expire = tick_add(now_ms, MS_TO_TICKS(s->fastinter));
+	if (s->check.fastinter) {
+		expire = tick_add(now_ms, MS_TO_TICKS(s->check.fastinter));
 		if (s->check.task->expire > expire)
 			s->check.task->expire = expire;
 	}
@@ -1389,7 +1389,7 @@ static struct task *process_chk(struct task *t)
 			 * to establish but only when timeout.check is set
 			 * as it may be to short for a full check otherwise
 			 */
-			t->expire = tick_add(now_ms, MS_TO_TICKS(s->inter));
+			t->expire = tick_add(now_ms, MS_TO_TICKS(s->check.inter));
 
 			if (s->proxy->timeout.check && s->proxy->timeout.connect) {
 				int t_con = tick_add(now_ms, s->proxy->timeout.connect);
@@ -1427,7 +1427,7 @@ static struct task *process_chk(struct task *t)
 			int t_con;
 
 			t_con = tick_add(t->expire, s->proxy->timeout.connect);
-			t->expire = tick_add(t->expire, MS_TO_TICKS(s->inter));
+			t->expire = tick_add(t->expire, MS_TO_TICKS(s->check.inter));
 
 			if (s->proxy->timeout.check)
 				t->expire = tick_first(t->expire, t_con);
@@ -1520,7 +1520,7 @@ static struct task *process_chk(struct task *t)
 
  reschedule:
 	while (tick_is_expired(t->expire, now_ms))
-		t->expire = tick_add(t->expire, MS_TO_TICKS(s->inter));
+		t->expire = tick_add(t->expire, MS_TO_TICKS(s->check.inter));
  out_wait:
 	return t;
 }

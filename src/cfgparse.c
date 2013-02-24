@@ -1338,9 +1338,9 @@ void init_default_instance()
 	defproxy.maxconn = cfg_maxpconn;
 	defproxy.conn_retries = CONN_RETRIES;
 
-	defproxy.defsrv.inter = DEF_CHKINTR;
-	defproxy.defsrv.fastinter = 0;
-	defproxy.defsrv.downinter = 0;
+	defproxy.defsrv.check.inter = DEF_CHKINTR;
+	defproxy.defsrv.check.fastinter = 0;
+	defproxy.defsrv.check.downinter = 0;
 	defproxy.defsrv.rise = DEF_RISETIME;
 	defproxy.defsrv.fall = DEF_FALLTIME;
 	defproxy.defsrv.check.port = 0;
@@ -4132,9 +4132,9 @@ stats_error_parsing:
 
 			newsrv->check.use_ssl = curproxy->defsrv.check.use_ssl;
 			newsrv->check.port	= curproxy->defsrv.check.port;
-			newsrv->inter		= curproxy->defsrv.inter;
-			newsrv->fastinter	= curproxy->defsrv.fastinter;
-			newsrv->downinter	= curproxy->defsrv.downinter;
+			newsrv->check.inter	= curproxy->defsrv.check.inter;
+			newsrv->check.fastinter	= curproxy->defsrv.check.fastinter;
+			newsrv->check.downinter	= curproxy->defsrv.check.downinter;
 			newsrv->rise		= curproxy->defsrv.rise;
 			newsrv->fall		= curproxy->defsrv.fall;
 			newsrv->maxqueue	= curproxy->defsrv.maxqueue;
@@ -4222,7 +4222,7 @@ stats_error_parsing:
 					err_code |= ERR_ALERT | ERR_FATAL;
 					goto out;
 				}
-				newsrv->inter = val;
+				newsrv->check.inter = val;
 				cur_arg += 2;
 			}
 			else if (!strcmp(args[cur_arg], "fastinter")) {
@@ -4239,7 +4239,7 @@ stats_error_parsing:
 					err_code |= ERR_ALERT | ERR_FATAL;
 					goto out;
 				}
-				newsrv->fastinter = val;
+				newsrv->check.fastinter = val;
 				cur_arg += 2;
 			}
 			else if (!strcmp(args[cur_arg], "downinter")) {
@@ -4256,7 +4256,7 @@ stats_error_parsing:
 					err_code |= ERR_ALERT | ERR_FATAL;
 					goto out;
 				}
-				newsrv->downinter = val;
+				newsrv->check.downinter = val;
 				cur_arg += 2;
 			}
 			else if (!defsrv && !strcmp(args[cur_arg], "addr")) {
