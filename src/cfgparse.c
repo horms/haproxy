@@ -4259,6 +4259,7 @@ stats_error_parsing:
 
 			newsrv->check.status	= HCHK_STATUS_INI;
 			newsrv->check.type	= curproxy->options2 & PR_O2_CHK_ANY;
+			newsrv->check.name	= "Health";
 			newsrv->check.server	= newsrv;
 
 			cur_arg = 3;
