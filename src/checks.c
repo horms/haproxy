@@ -273,7 +273,7 @@ static void set_server_check_status(struct check *check, short status, const cha
 		/* FIXME end: calculate local version of the health/rise/fall/state */
 
 		chunk_appendf(&trash,
-		             "Health check for %sserver %s/%s %s%s",
+		             "%s check for %sserver %s/%s %s%s", check->name,
 		             s->state & SRV_BACKUP ? "backup " : "",
 		             s->proxy->id, s->id,
 		             (check->result & SRV_CHK_DISABLE)?"conditionally ":"",
