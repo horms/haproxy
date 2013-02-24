@@ -4179,7 +4179,7 @@ stats_error_parsing:
 			newsrv->uweight = newsrv->iweight
 						= curproxy->defsrv.iweight;
 
-			newsrv->health = newsrv->rise;	/* up, but will fall down at first failure */
+			newsrv->check.health = newsrv->rise;	/* up, but will fall down at first failure */
 
 			cur_arg = 3;
 		} else {
@@ -4214,8 +4214,8 @@ stats_error_parsing:
 					goto out;
 				}
 
-				if (newsrv->health)
-					newsrv->health = newsrv->rise;
+				if (newsrv->check.health)
+					newsrv->check.health = newsrv->rise;
 				cur_arg += 2;
 			}
 			else if (!strcmp(args[cur_arg], "fall")) {
@@ -4386,7 +4386,7 @@ stats_error_parsing:
 			else if (!defsrv && !strcmp(args[cur_arg], "disabled")) {
 				newsrv->state |= SRV_MAINTAIN;
 				newsrv->state &= ~SRV_RUNNING;
-				newsrv->health = 0;
+				newsrv->check.health = 0;
 				cur_arg += 1;
 			}
 			else if (!defsrv && !strcmp(args[cur_arg], "observe")) {
@@ -6603,7 +6603,7 @@ out_uri_auth_compat:
 				if (srv->state & SRV_MAINTAIN) {
 					newsrv->state |= SRV_MAINTAIN;
 					newsrv->state &= ~SRV_RUNNING;
-					newsrv->health = 0;
+					newsrv->check.health = 0;
 				}
 
 				newsrv->track = srv;
