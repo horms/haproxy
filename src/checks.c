@@ -891,7 +891,7 @@ static void event_srv_chk_r(struct connection *conn)
 	}
 
 	/* Run the checks... */
-	switch (s->proxy->options2 & PR_O2_CHK_ANY) {
+	switch (check->type) {
 	case PR_O2_HTTP_CHK:
 		if (!done && check->bi->i < strlen("HTTP/1.0 000\r"))
 			goto wait_more_data;
@@ -1584,6 +1584,7 @@ int start_checks() {
 			}
 
 			s->check.task = t;
+			s->check.type = s->proxy->options2 & PR_O2_CHK_ANY;
 			t->process = process_chk;
 			t->context = &s->check;
 

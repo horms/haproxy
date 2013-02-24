@@ -122,6 +122,7 @@ struct check {
 	int state;				/* health-check result : CHK_* */
 	int health;				/* 0 to server->rise-1 = bad;
 						 * rise to server->rise+server->fall-1 = good */
+	int type;				/* Check type, one of PR_O2_*_CHK */
 	const char *name;			/* Name of check: "Health" or "Agent" */
 	struct server *server;			/* back-pointer to server */
 };
