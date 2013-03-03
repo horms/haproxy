@@ -328,6 +328,7 @@ struct proxy {
 	int check_len;				/* Length of the HTTP or SSL3 request */
 	char *expect_str;			/* http-check expected content : string or text version of the regex */
 	regex_t *expect_regex;			/* http-check expected content */
+	const char *agent_http_header;		/* http-check header to use for agent checks */
 	struct chunk errmsg[HTTP_ERR_SIZE];	/* default or customized error messages for known errors */
 	int uuid;				/* universally unique proxy ID, used for SNMP */
 	unsigned int backlog;			/* force the frontend's listen backlog */
@@ -359,6 +360,7 @@ struct proxy {
 	} conf;					/* config information */
 	void *parent;				/* parent of the proxy when applicable */
 	struct comp *comp;			/* http compression */
+
 };
 
 struct switching_rule {

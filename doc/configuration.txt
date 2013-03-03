@@ -1139,6 +1139,7 @@ force-persist                             -          X         X         X
 fullconn                                  X          -         X         X
 grace                                     X          X         X         X
 hash-type                                 X          -         X         X
+http-check agent-hdr                      X          -         X         X
 http-check disable-on-404                 X          -         X         X
 http-check expect                         -          -         X         X
 http-check send-state                     X          -         X         X
@@ -2525,6 +2526,24 @@ hash-type <method>
   The default hash type is "map-based" and is recommended for most usages.
 
   See also : "balance", "server"
+
+
+http-check agent-hdr
+  Use the value of the given http header as the result of an agent check
+  May be used in sections :   defaults | frontend | listen | backend
+                                 yes   |    no    |   yes  |   yes
+  Arguments :
+
+    <header>  The header string to use to send the server name
+
+  When this option is set an http check is enhanced to read the value
+  of the given header in the response to an http check and interpret
+  it as the result of an agent check. In this way an http and agent check
+  may be performed simultaneously.
+
+  This option is overridden by the agent-port parameter.
+
+  See also : "option lb-agent-chk", "agent-port"
 
 
 http-check disable-on-404
@@ -7681,10 +7700,11 @@ agent-port <port>
 
   In this the agent check is run in conjunction with another check
   and as such the check backend should be set to some value other than
-  "lb-agent-check". An alternative scenario is to run only an agent check
+  "lb-agent-check". A second scenario is to run only an agent check
   in which case the check backend should be set to "lb-agent-check" and
   "agent-port" should not be set; in that scenario the port may be set
-  using the "port" parameter.
+  using the "port" parameter. A third scenario is to use "http-check
+  agent-hdr" to run an agent and http checks simultaneously over HTTP.
 
   See also the "agent-inter" parameter.
 
