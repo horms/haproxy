@@ -1139,6 +1139,7 @@ force-persist                             -          X         X         X
 fullconn                                  X          -         X         X
 grace                                     X          X         X         X
 hash-type                                 X          -         X         X
+http-check agent-hdr                      X          -         X         X
 http-check disable-on-404                 X          -         X         X
 http-check expect                         -          -         X         X
 http-check send-state                     X          -         X         X
@@ -2576,6 +2577,24 @@ hash-type <method> <function> <modifier>
   the range of the values being hashed.
 
   See also : "balance", "server"
+
+
+http-check agent-hdr
+  Use the value of the given http header as the result of an agent check
+  May be used in sections :   defaults | frontend | listen | backend
+                                 yes   |    no    |   yes  |   yes
+  Arguments :
+
+    <header>  The header string to use to send the server name
+
+  When this option is set an http check is enhanced to read the value
+  of the given header in the response to an http check and interpret
+  it as the result of an agent check. In this way an http and agent check
+  may be performed simultaneously.
+
+  This option is overridden by the agent-port parameter.
+
+  See also : "option lb-agent-chk", "agent-port"
 
 
 http-check disable-on-404
@@ -7672,9 +7691,13 @@ addr <ipv4|ipv6>
 
 agent-check
   Enable an auxiliary agent check which is run independently of a regular
-  health check. An agent health check is performed by making a TCP
-  connection to the port set by the "agent-port" parameter" and reading
-  an ASCII string. The string should have one of the following forms:
+  health check.  An alternate mode of operation for agent checks is to use
+  "http-check agent-hdr" to run an agent and http checks simultaneously
+  over HTTP.
+
+  An agent health check is performed by making a TCP connection to the port
+  set by the "agent-port" parameter" and reading an ASCII string. The
+  string should have one of the following forms:
 
   * An ASCII representation of an positive integer percentage.
     e.g. "75%"
