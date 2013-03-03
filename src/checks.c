@@ -819,6 +819,56 @@ static void event_srv_chk_w(struct connection *conn)
 	goto out_wakeup;
 }
 
+/*
+ * Perform content verification check on data buffer.
+ * The buffer MUST be terminated by a null byte before calling this function.
+ * Sets server status appropriately.
+ */
+static void agent_expect(struct check *check, char *data)
+{
+	short status = HCHK_STATUS_L7RSP;
+	const char *desc = "Unknown feedback string";
+	const char *down_cmd = NULL;
+
+	cut_crlf(data);
+
+	if (strchr(data, '%')) {
+		desc = server_parse_weight_change_request(check->server, data);
+		if (!desc) {
+			status = HCHK_STATUS_L7OKD;
+			desc = data;
+		}
+	} else if (!strcasecmp(data, "drain")) {
+		desc = server_parse_weight_change_request(check->server, "0%");
+		if (!desc) {
+			desc = "drain";
+			status = HCHK_STATUS_L7OKD;
+		}
+	} else if (!strncasecmp(data, "down", strlen("down"))) {
+		down_cmd = "down";
+	} else if (!strncasecmp(data, "stopped", strlen("stopped"))) {
+		down_cmd = "stopped";
+	} else if (!strncasecmp(data, "fail", strlen("fail"))) {
+		down_cmd = "fail";
+	}
+
+	if (down_cmd) {
+		const char *end = data + strlen(down_cmd);
+		/*
+		 * The command keyword must terminated the string or
+		 * be followed by a blank.
+		 */
+		if (end[0] == '\0' || end[0] == ' ' || end[0] == '\t') {
+			status = HCHK_STATUS_L7STS;
+			/* Skip over leading blanks */
+			while (end[0] != '\0' && (end[0] == ' ' || end[0] == '\t'))
+				end++;
+			desc = end;
+		}
+	}
+
+	set_server_check_status(check, status, desc);
+}
 
 /*
  * This function is used only for server health-checks. It handles the server's
@@ -971,54 +1021,11 @@ static void event_srv_chk_r(struct connection *conn)
 			set_server_check_status(check, HCHK_STATUS_L7STS, desc);
 		break;
 
-	case PR_O2_LB_AGENT_CHK: {
-		short status = HCHK_STATUS_L7RSP;
-		const char *desc = "Unknown feedback string";
-		const char *down_cmd = NULL;
-
+	case PR_O2_LB_AGENT_CHK:
 		if (!done)
 			goto wait_more_data;
-
-		cut_crlf(check->bi->data);
-
-		if (strchr(check->bi->data, '%')) {
-			desc = server_parse_weight_change_request(s, check->bi->data);
-			if (!desc) {
-				status = HCHK_STATUS_L7OKD;
-				desc = check->bi->data;
-			}
-		} else if (!strcasecmp(check->bi->data, "drain")) {
-			desc = server_parse_weight_change_request(s, "0%");
-			if (!desc) {
-				desc = "drain";
-				status = HCHK_STATUS_L7OKD;
-			}
-		} else if (!strncasecmp(check->bi->data, "down", strlen("down"))) {
-			down_cmd = "down";
-		} else if (!strncasecmp(check->bi->data, "stopped", strlen("stopped"))) {
-			down_cmd = "stopped";
-		} else if (!strncasecmp(check->bi->data, "fail", strlen("fail"))) {
-			down_cmd = "fail";
-		}
-
-		if (down_cmd) {
-			const char *end = check->bi->data + strlen(down_cmd);
-			/*
-			 * The command keyword must terminated the string or
-			 * be followed by a blank.
-			 */
-			if (end[0] == '\0' || end[0] == ' ' || end[0] == '\t') {
-				status = HCHK_STATUS_L7STS;
-				/* Skip over leading blanks */
-				while (end[0] != '\0' && (end[0] == ' ' || end[0] == '\t'))
-					end++;
-				desc = end;
-			}
-		}
-
-		set_server_check_status(check, status, desc);
+		agent_expect(check, check->bi->data);
 		break;
-	}
 
 	case PR_O2_PGSQL_CHK:
 		if (!done && check->bi->i < 9)
