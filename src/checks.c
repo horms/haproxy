@@ -1641,6 +1641,70 @@ int start_checks() {
 	return 0;
 }
 
+enum httpchk_parse_header_state {
+	in_key,
+	in_value,
+	invalid,
+};
+
+static char *httpchk_parse_header(const struct server *s, const char *key, char **value_p)
+{
+	enum httpchk_parse_header_state state = key ? in_key : invalid;
+			state = (key && !*value_p) ? in_key : invalid;
+	size_t key_offset = 0;
+	char *contentptr;
+	int crlf = 0;
+
+	*value_p = NULL;
+
+	/* very simple response parser:
+	 * + Ignore CR.
+	 * + End of headers is determined by counting consecutive LFs
+	 * + Stop and return a pointer to the first char after the double
+	 *   CRLF or to '\0' if no double CRLF is found.
+	 * + If key is non-NULL then it will be matched against keys in
+	 *   headers.  The value of the first match of a header with a
+	 *   non-NULL value is returned in *value_p.
+	 *   The value is truncated at the first CRLF, and the key and
+	 *   value are treated as literals: gross simplifications.
+	 * + pointers described above point to data at an offset to
+	 *   s->check.bi->data.
+	 */
+
+	for (contentptr = s->check.bi->data; *contentptr; contentptr++) {
+		if (crlf >= 2)
+			break;
+		if (*contentptr == '\r' || *contentptr == '\n') {
+			key_offset = 0;
+			state = (key && !*value_p) ? in_key : invalid;
+			if (*contentptr == '\n')
+				crlf++;
+		} else {
+			crlf = 0;
+			switch (state) {
+			case in_key:
+				if (key[key_offset] == '\0' && *contentptr == ':') {
+					state = in_value;
+					key_offset = 0;
+				} else if (key[key_offset] != *contentptr) {
+					state = invalid;
+				} else {
+					key_offset++;
+				}
+				break;
+			case in_value:
+				if (!*value_p && *contentptr != ' ' && *contentptr != '\t')
+					*value_p = contentptr;
+				break;
+			case invalid:
+				break;
+			}
+		}
+	}
+
+	return contentptr;
+}
+
 /*
  * Perform content verification check on data in s->check.buffer buffer.
  * The buffer MUST be terminated by a null byte before calling this function.
@@ -1653,7 +1717,6 @@ static int httpchk_expect(struct server *s, int done)
 	static char status_msg[] = "HTTP status check returned code <000>";
 	char status_code[] = "000";
 	char *contentptr;
-	int crlf;
 	int ret;
 
 	switch (s->proxy->options2 & PR_O2_EXP_TYPE) {
@@ -1676,39 +1739,14 @@ static int httpchk_expect(struct server *s, int done)
 
 	case PR_O2_EXP_STR:
 	case PR_O2_EXP_RSTR:
-		/* very simple response parser: ignore CR and only count consecutive LFs,
-		 * stop with contentptr pointing to first char after the double CRLF or
-		 * to '\0' if crlf < 2.
-		 */
-		crlf = 0;
-		for (contentptr = s->check.bi->data; *contentptr; contentptr++) {
-			if (crlf >= 2)
-				break;
-			if (*contentptr == '\r')
-				continue;
-			else if (*contentptr == '\n')
-				crlf++;
-			else
-				crlf = 0;
-		}
+		contentptr = httpchk_parse_header(s, NULL, NULL);
 
 		/* Check that response contains a body... */
-		if (crlf < 2) {
-			if (!done)
-				return 0;
-
-			set_server_check_status(&s->check, HCHK_STATUS_L7RSP,
-						"HTTP content check could not find a response body");
-			return 1;
-		}
-
-		/* Check that response body is not empty... */
 		if (*contentptr == '\0') {
 			if (!done)
 				return 0;
 
-			set_server_check_status(&s->check, HCHK_STATUS_L7RSP,
-						"HTTP content check found empty response body");
+			set_server_check_status(&s->check, HCHK_STATUS_L7RSP, "HTTP content check could not find a response body or an empty response body was found");
 			return 1;
 		}
 
