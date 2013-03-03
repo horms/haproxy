@@ -3864,7 +3864,25 @@ stats_error_parsing:
 		if (warnifnotcap(curproxy, PR_CAP_BE, file, linenum, args[0], NULL))
 			err_code |= ERR_WARN;
 
-		if (strcmp(args[1], "disable-on-404") == 0) {
+		if (strcmp(args[1], "agent-hdr") == 0) {
+			int cur_arg;
+
+			if (curproxy->agent_http_header) {
+				Alert("parsing [%s:%d] : '%s %s' already specified.\n", file, linenum, args[0], args[1]);
+				err_code |= ERR_ALERT | ERR_FATAL;
+				goto out;
+			}
+
+			cur_arg = 2;
+			if (!*(args[cur_arg ])) {
+				Alert("parsing [%s:%d] : '%s %s' expects <string> as an argument.\n",
+				      file, linenum, args[0], args[1]);
+				err_code |= ERR_ALERT | ERR_FATAL;
+				goto out;
+			}
+			curproxy->agent_http_header = strdup(args[cur_arg]);
+		}
+		else if (strcmp(args[1], "disable-on-404") == 0) {
 			/* enable a graceful server shutdown on an HTTP 404 response */
 			curproxy->options |= PR_O_DISABLE404;
 		}
