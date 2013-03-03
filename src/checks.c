@@ -848,6 +848,71 @@ static void event_srv_chk_w(struct connection *conn)
 }
 
 /*
+ * Perform content verification check on data buffer.
+ * The buffer MUST be terminated by a null byte before calling this function.
+ * Sets server status appropriately.
+ */
+static void agent_expect(struct check *check, char *data)
+{
+	short status = HCHK_STATUS_L7RSP;
+	const char *desc = "Unknown feedback string";
+	const char *down_cmd = NULL;
+	int disabled;
+
+	cut_crlf(data);
+
+	/*
+	 * The agent may have been disabled after a check was initialised.
+	 * If so, ignore weight changes and drain settings from the agent.
+	 * Note that the setting is always present in the state of the
+	 * agent the server, regardless of if the agent is being run
+	 * as a primary or secondary check. That is, regardless
+	 * of if the check parameter of this function is the agent or
+	 * check field of the server.
+	 */
+	disabled = check->server->agent.state & CHK_STATE_DISABLED;
+
+	if (strchr(data, '%')) {
+		if (disabled)
+			return;
+		desc = server_parse_weight_change_request(check->server, data);
+		if (!desc) {
+			status = HCHK_STATUS_L7OKD;
+			desc = data;
+		}
+	} else if (!strcasecmp(data, "drain")) {
+		if (disabled)
+			return;
+		desc = server_parse_weight_change_request(check->server, "0%");
+		if (!desc) {
+			status = HCHK_STATUS_L7OKD;
+			desc = "drain";
+		}
+	} else if (!strncasecmp(data, "down", strlen("down"))) {
+		down_cmd = "down";
+	} else if (!strncasecmp(data, "stopped", strlen("stopped"))) {
+		down_cmd = "stopped";
+	} else if (!strncasecmp(data, "fail", strlen("fail"))) {
+		down_cmd = "fail";
+	}
+
+	if (down_cmd) {
+		const char *end = data + strlen(down_cmd);
+		/*
+		 * The command keyword must terminated the string or
+		 * be followed by a blank.
+		 */
+		if (end[0] == '\0' || end[0] == ' ' || end[0] == '\t') {
+			status = HCHK_STATUS_L7STS;
+			desc = data;
+		}
+	}
+
+	set_server_check_status(check, status, desc);
+	set_server_drain_state(check->server);
+}
+
+/*
  * This function is used only for server health-checks. It handles the server's
  * reply to an HTTP request, SSL HELLO or MySQL client Auth. It calls
  * set_server_check_status() to update check->status, check->duration
@@ -998,71 +1063,11 @@ static void event_srv_chk_r(struct connection *conn)
 			set_server_check_status(check, HCHK_STATUS_L7STS, desc);
 		break;
 
-	case PR_O2_LB_AGENT_CHK: {
-		short status = HCHK_STATUS_L7RSP;
-		const char *desc = "Unknown feedback string";
-		const char *down_cmd = NULL;
-		int disabled;
-		int drain = 0;
-
+	case PR_O2_LB_AGENT_CHK:
 		if (!done)
 			goto wait_more_data;
-
-		cut_crlf(check->bi->data);
-
-		/*
-		 * The agent may have been disabled after a check was
-		 * initialised.  If so, ignore weight changes and drain
-		 * settings from the agent.  Note that the setting is
-		 * always present in the state of the agent the server,
-		 * regardless of if the agent is being run as a primary or
-		 * secondary check. That is, regardless of if the check
-		 * parameter of this function is the agent or check field
-		 * of the server.
-		 */
-		disabled = check->server->agent.state & CHK_STATE_DISABLED;
-
-		if (strchr(check->bi->data, '%')) {
-			if (disabled)
-				break;
-			desc = server_parse_weight_change_request(s, check->bi->data);
-			if (!desc) {
-				status = HCHK_STATUS_L7OKD;
-				desc = check->bi->data;
-			}
-		} else if (!strcasecmp(check->bi->data, "drain")) {
-			if (disabled)
-				break;
-			desc = server_parse_weight_change_request(s, "0%");
-			if (!desc) {
-				desc = "drain";
-				status = HCHK_STATUS_L7OKD;
-				drain = 1;
-			}
-		} else if (!strncasecmp(check->bi->data, "down", strlen("down"))) {
-			down_cmd = "down";
-		} else if (!strncasecmp(check->bi->data, "stopped", strlen("stopped"))) {
-			down_cmd = "stopped";
-		} else if (!strncasecmp(check->bi->data, "fail", strlen("fail"))) {
-			down_cmd = "fail";
-		}
-
-		if (down_cmd) {
-			const char *end = check->bi->data + strlen(down_cmd);
-			/*
-			 * The command keyword must terminated the string or
-			 * be followed by a blank.
-			 */
-			if (end[0] == '\0' || end[0] == ' ' || end[0] == '\t') {
-				status = HCHK_STATUS_L7STS;
-				desc = check->bi->data;
-			}
-		}
-
-		set_server_check_status(check, status, desc);
-		set_server_drain_state(check->server);
+		agent_expect(check, check->bi->data);
 		break;
-	}
 
 	case PR_O2_PGSQL_CHK:
 		if (!done && check->bi->i < 9)
