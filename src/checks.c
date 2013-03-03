@@ -1307,6 +1307,34 @@ static struct task *server_warmup(struct task *t)
 	return t;
 }
 
+static void process_result(struct check *check)
+{
+	struct server *s = check->server;
+
+	if (check->result & SRV_CHK_FAILED) {    /* a failure or timeout detected */
+		if (check->health > s->rise) {
+			check->health--; /* still good */
+			s->counters.failed_checks++;
+		}
+		else
+			set_server_down(check);
+	}
+	else {  /* check was OK */
+	/* we may have to add/remove this server from the LB group */
+		if ((s->state & SRV_RUNNING) && (s->proxy->options & PR_O_DISABLE404)) {
+			if ((s->state & SRV_GOINGDOWN) && !(check->result & SRV_CHK_DISABLE))
+				set_server_enabled(s);
+			else if (!(s->state & SRV_GOINGDOWN) && (check->result & SRV_CHK_DISABLE))
+				set_server_disabled(check);
+		}
+
+		if (check->health < s->rise + s->fall - 1) {
+			check->health++; /* was bad, stays for a while */
+			set_server_up(check);
+		}
+	}
+}
+
 /*
  * manages a server health-check. Returns
  * the time the task accepts to wait, or TIME_ETERNITY for infinity.
@@ -1485,6 +1513,17 @@ static struct task *process_chk(struct task *t)
 		}
 
 		/* check complete or aborted */
+		process_result(check);
+
+		/* The agent check may run without a task if
+		 * it is performed as aprt of the primary health check.
+		 * If so process its result, here, while processing
+		 * the primary health check.
+		 */
+		if (!check->server->agent.task &&
+		    check->server->agent.state != HCHK_STATUS_INI) {
+			process_result(&check->server->agent);
+		}
 
 		if (check->result & SRV_CHK_FAILED) {    /* a failure or timeout detected */
 			if (check->health > s->rise) {
@@ -1702,8 +1741,21 @@ static int httpchk_expect(struct server *s, int done)
 {
 	static char status_msg[] = "HTTP status check returned code <000>";
 	char status_code[] = "000";
-	char *contentptr;
+	char *contentptr = NULL, *agent_value = NULL;
 	int ret;
+
+	if (s->proxy->agent_http_header) {
+		httpchk_parse_header(s, s->proxy->agent_http_header, &agent_value);
+
+		if (!agent_value || !strchr(agent_value, '\n')) {
+			/* if we don't match, we may need to wait more */
+			if (!done)
+				return 0;
+			set_server_check_status(&s->agent, HCHK_STATUS_L7RSP,
+						"HTTP check did not match agent-hdr");
+			agent_value = NULL;
+		}
+	}
 
 	switch (s->proxy->options2 & PR_O2_EXP_TYPE) {
 	case PR_O2_EXP_STS:
@@ -1725,7 +1777,8 @@ static int httpchk_expect(struct server *s, int done)
 
 	case PR_O2_EXP_STR:
 	case PR_O2_EXP_RSTR:
-		contentptr = httpchk_parse_header(s, NULL, NULL);
+		if (!contentptr)
+			contentptr = httpchk_parse_header(s, s->proxy->agent_http_header, &agent_value);
 
 		/* Check that response contains a body... */
 		if (*contentptr == '\0') {
@@ -1733,7 +1786,7 @@ static int httpchk_expect(struct server *s, int done)
 				return 0;
 
 			set_server_check_status(&s->check, HCHK_STATUS_L7RSP, "HTTP content check could not find a response body or an empty response body was found");
-			return 1;
+			goto agent;
 		}
 
 		/* Check the response content against the supplied string
@@ -1766,6 +1819,12 @@ static int httpchk_expect(struct server *s, int done)
 		}
 		break;
 	}
+
+agent:
+	if (s->proxy->agent_http_header && agent_value) {
+		agent_expect(&s->agent, agent_value);
+	}
+
 	return 1;
 }
 

@@ -1631,7 +1631,7 @@ out:
 	return err_code;
 }
 
-static int init_check(struct server *s, const char *name, struct check *check, const char * file, int linenum)
+static int init_check(struct server *s, struct check *check, const char * file, int linenum)
 {
 	/* Allocate buffer for requests... */
 	if ((check->bi = calloc(sizeof(struct buffer) + global.tune.chksize, sizeof(char))) == NULL) {
@@ -1654,9 +1654,7 @@ static int init_check(struct server *s, const char *name, struct check *check, c
 	}
 
 	check->conn->t.sock.fd = -1; /* no agent in progress yet */
-	check->status = HCHK_STATUS_INI;
 	check->server = s;
-	check->name = name;
 
 	return 0;
 }
@@ -3809,7 +3807,25 @@ stats_error_parsing:
 		if (warnifnotcap(curproxy, PR_CAP_BE, file, linenum, args[0], NULL))
 			err_code |= ERR_WARN;
 
-		if (strcmp(args[1], "disable-on-404") == 0) {
+		if (strcmp(args[1], "agent-hdr") == 0) {
+			int cur_arg;
+
+			if (curproxy->agent_http_header) {
+				Alert("parsing [%s:%d] : '%s %s' already specified.\n", file, linenum, args[0], args[1]);
+				err_code |= ERR_ALERT | ERR_FATAL;
+				goto out;
+			}
+
+			cur_arg = 2;
+			if (!*(args[cur_arg ])) {
+				Alert("parsing [%s:%d] : '%s %s' expects <string> as an argument.\n",
+				      file, linenum, args[0], args[1]);
+				err_code |= ERR_ALERT | ERR_FATAL;
+				goto out;
+			}
+			curproxy->agent_http_header = strdup(args[cur_arg]);
+		}
+		else if (strcmp(args[1], "disable-on-404") == 0) {
 			/* enable a graceful server shutdown on an HTTP 404 response */
 			curproxy->options |= PR_O_DISABLE404;
 		}
@@ -4189,8 +4205,14 @@ stats_error_parsing:
 			newsrv->uweight = newsrv->iweight
 						= curproxy->defsrv.iweight;
 
-			newsrv->check.health = newsrv->rise;	/* up, but will fall down at first failure */
-			newsrv->agent.health = newsrv->rise;	/* up, but will fall down at first failure */
+			newsrv->check.health	= newsrv->rise;	/* up, but will fall down at first failure */
+			newsrv->check.status	= HCHK_STATUS_INI;
+			newsrv->check.name	= "Health";
+			newsrv->check.server	= newsrv;
+			newsrv->agent.health	= newsrv->rise;	/* up, but will fall down at first failure */
+			newsrv->agent.status	= HCHK_STATUS_INI;
+			newsrv->agent.name	= "Agent";
+			newsrv->agent.server	= newsrv;
 
 			cur_arg = 3;
 		} else {
@@ -4792,7 +4814,7 @@ stats_error_parsing:
 				goto out;
 			}
 
-			ret = init_check(newsrv, "Health", &newsrv->check, file, linenum);
+			ret = init_check(newsrv, &newsrv->check, file, linenum);
 			if (ret) {
 				err_code |= ret;
 				goto out;
@@ -4821,7 +4843,7 @@ stats_error_parsing:
 			if (!newsrv->agent.inter)
 				newsrv->agent.inter = newsrv->check.inter;
 
-			ret = init_check(newsrv, "Agent", &newsrv->agent, file, linenum);
+			ret = init_check(newsrv, &newsrv->agent, file, linenum);
 			if (ret) {
 				err_code |= ret;
 				goto out;
