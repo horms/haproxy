@@ -4348,7 +4348,7 @@ stats_error_parsing:
 				newsrv->check.downinter = val;
 				cur_arg += 2;
 			}
-			else if (!defsrv && !strcmp(args[cur_arg], "addr")) {
+			else if (!defsrv && (!strcmp(args[cur_arg], "addr") || !strcmp(args[cur_arg], "agent-addr"))) {
 				struct sockaddr_storage *sk;
 				int port1, port2;
 
@@ -4366,7 +4366,12 @@ stats_error_parsing:
 					goto out;
 				}
 
-				newsrv->check.addr = *sk;
+				if (!strcmp(args[cur_arg], "addr")) {
+					newsrv->check.addr = *sk;
+				} else {
+					do_agent = 1;
+					newsrv->agent.addr = *sk;
+				}
 				cur_arg += 2;
 			}
 			else if (!strcmp(args[cur_arg], "port")) {
@@ -4830,14 +4835,14 @@ stats_error_parsing:
 			int ret;
 
 			if (!newsrv->agent.port) {
-				Alert("parsing [%s:%d] : server %s has agent-inter without agent-port.\n",
+				Alert("parsing [%s:%d] : server %s has agent-addr or agent-inter without agent-port.\n",
 				      file, linenum, newsrv->id);
 				err_code |= ERR_ALERT | ERR_FATAL;
 				goto out;
 			}
 
 			if (newsrv->proxy->options2 & PR_O2_LB_AGENT_CHK) {
-				Alert("parsing [%s:%d] : server %s has agent-inter or agent-port but check type is lb-agent-chk.\n",
+				Alert("parsing [%s:%d] : server %s has agent-addr, agent-inter or agent-port but check type is lb-agent-chk.\n",
 				      file, linenum, newsrv->id);
 				err_code |= ERR_ALERT | ERR_FATAL;
 				goto out;

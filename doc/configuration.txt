@@ -2505,7 +2505,7 @@ http-check agent-hdr
 
   This option is overridden by the agent-port parameter.
 
-  See also : "option lb-agent-chk", "agent-port"
+  See also : "option lb-agent-chk", "agent-addr", "agent-port"
 
 
 http-check disable-on-404
@@ -3806,7 +3806,8 @@ option lb-agent-chk
   information described above. Otherwise the port of the serivce will be
   used.
 
-  This option conflicts with the agent-port parameter to a server.
+  This option conflicts with the "agent-addr" and "agent-port" parameters
+  to a server.
 
 
 option ldap-check
@@ -7408,6 +7409,16 @@ addr <ipv4|ipv6>
   address to specific component able to perform complex tests which are more
   suitable to health-checks than the application. This parameter is ignored if
   the "check" parameter is not set. See also the "port" parameter.
+
+  Supported in default-server: No
+
+agent-addr <ipv4|ipv6>
+  Using the "agent-addr" parameter, it becomes possible to use a different IP address
+  to send agent checks. On some servers, it may be desirable to dedicate an IP
+  address to specific component able to perform complex tests which are more
+  suitable to agent checks than the application.
+
+  Requires the "agent-port" parameter to be set.
 
   Supported in default-server: No
 
