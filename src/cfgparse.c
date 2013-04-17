@@ -3514,7 +3514,7 @@ stats_error_parsing:
 			}
 		}
 		else if (!strcmp(args[1], "lb-agent-chk")) {
-			/* use dynmaic health check */
+			/* use agent health check */
 			free(curproxy->check_req);
 			curproxy->check_req = NULL;
 			curproxy->options2 &= ~PR_O2_CHK_ANY;
