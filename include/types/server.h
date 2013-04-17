@@ -109,6 +109,8 @@ struct check {
 	struct connection *conn;		/* connection state for health checks */
 
 	short port;				/* the port to use for the health checks */
+	struct sockaddr_storage addr;		/* the address to connect to */
+	struct protocol *proto;	        	/* server address protocol for health checks */
 	struct buffer *bi, *bo;			/* input and output buffers to send/recv check */
 	struct task *task;			/* the task associated to the health check processing, NULL if disabled */
 	struct timeval start;			/* last health check start time */
@@ -185,9 +187,7 @@ struct server {
 	int puid;				/* proxy-unique server ID, used for SNMP, and "first" LB algo */
 
 	struct {                                /* configuration  used by halth-check and agent-check */
-		struct protocol *proto;	        /* server address protocol for health checks */
 		struct xprt_ops *xprt;          /* transport layer operations for health checks */
-		struct sockaddr_storage addr;   /* the address to check, if different from <addr> */
 	} check_common;
 
 	struct check check;                     /* health-check specific configuration */

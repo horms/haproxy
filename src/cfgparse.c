@@ -4169,8 +4169,7 @@ stats_error_parsing:
 				realport = port1;
 			}
 
-			newsrv->addr = *sk;
-			newsrv->proto = newsrv->check_common.proto = protocol_by_family(newsrv->addr.ss_family);
+			newsrv->proto = newsrv->check.proto = protocol_by_family(newsrv->addr.ss_family);
 			newsrv->xprt  = newsrv->check_common.xprt  = &raw_sock;
 
 			if (!newsrv->proto) {
@@ -4182,11 +4181,13 @@ stats_error_parsing:
 
 			newsrv->check.use_ssl	= curproxy->defsrv.check.use_ssl;
 			newsrv->check.port	= curproxy->defsrv.check.port;
+			newsrv->check.addr	= *sk;
 			newsrv->check.inter	= curproxy->defsrv.check.inter;
 			newsrv->check.fastinter	= curproxy->defsrv.check.fastinter;
 			newsrv->check.downinter	= curproxy->defsrv.check.downinter;
 			newsrv->agent.use_ssl	= curproxy->defsrv.agent.use_ssl;
 			newsrv->agent.port	= curproxy->defsrv.agent.port;
+			newsrv->agent.addr	= *sk;
 			newsrv->agent.inter	= curproxy->defsrv.agent.inter;
 			newsrv->agent.fastinter	= curproxy->defsrv.agent.fastinter;
 			newsrv->agent.downinter	= curproxy->defsrv.agent.downinter;
@@ -4365,7 +4366,7 @@ stats_error_parsing:
 					goto out;
 				}
 
-				newsrv->check_common.addr = *sk;
+				newsrv->check.addr = *sk;
 				cur_arg += 2;
 			}
 			else if (!strcmp(args[cur_arg], "port")) {
@@ -4783,7 +4784,7 @@ stats_error_parsing:
 			 * same as for the production traffic. Otherwise we use raw_sock by
 			 * default, unless one is specified.
 			 */
-			if (!newsrv->check.port && !is_addr(&newsrv->check_common.addr)) {
+			if (!newsrv->check.port && !is_addr(&newsrv->check.addr)) {
 #ifdef USE_OPENSSL
 				newsrv->check.use_ssl |= newsrv->use_ssl;
 #endif
@@ -4791,7 +4792,7 @@ stats_error_parsing:
 			}
 			/* try to get the port from check_core.addr if check.port not set */
 			if (!newsrv->check.port)
-				newsrv->check.port = get_host_port(&newsrv->check_common.addr);
+				newsrv->check.port = get_host_port(&newsrv->check.addr);
 
 			if (!newsrv->check.port)
 				newsrv->check.port = realport; /* by default */
