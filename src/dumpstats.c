@@ -2097,13 +2097,15 @@ static int stats_dump_sv_stats(struct stream_interface *si, struct proxy *px, in
 	int i;
 
 	if (si->applet.ctx.stats.flags & STAT_FMT_HTML) {
-		static char *srv_hlt_st[7] = {
+		static char *srv_hlt_st[9] = {
 			"DOWN",
 			"DN %d/%d &uarr;",
 			"UP %d/%d &darr;",
 			"UP",
 			"NOLB %d/%d &darr;",
 			"NOLB",
+			"DRAIN %d/%d &darr;",
+			"DRAIN",
 			"<i>no check</i>"
 		};
 
@@ -2319,13 +2321,15 @@ static int stats_dump_sv_stats(struct stream_interface *si, struct proxy *px, in
 			chunk_appendf(&trash, "<td class=ac>-</td></tr>\n");
 	}
 	else { /* CSV mode */
-		static char *srv_hlt_st[7] = {
+		static char *srv_hlt_st[9] = {
 			"DOWN,",
 			"DOWN %d/%d,",
 			"UP %d/%d,",
 			"UP,",
 			"NOLB %d/%d,",
 			"NOLB,",
+			"DRAIN %d/%d,",
+			"DRAIN,",
 			"no check,"
 		};
 
@@ -2910,7 +2914,7 @@ static int stats_dump_proxy_to_buffer(struct stream_interface *si, struct proxy 
 
 			/* FIXME: produce some small strings for "UP/DOWN x/y &#xxxx;" */
 			if (!(svs->state & SRV_CHECKED))
-				sv_state = 6;
+				sv_state = 8;
 			else if (svs->state & SRV_RUNNING) {
 				if (svs->check.health == svs->rise + svs->fall - 1)
 					sv_state = 3; /* UP */
@@ -2919,6 +2923,8 @@ static int stats_dump_proxy_to_buffer(struct stream_interface *si, struct proxy 
 
 				if (svs->state & SRV_GOINGDOWN)
 					sv_state += 2;
+				else if (svs->state & SRV_DRAIN)
+					sv_state += 4;
 			}
 			else
 				if (svs->check.health)
