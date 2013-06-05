@@ -830,6 +830,7 @@ static void agent_expect(struct check *check, char *data)
 	short status = HCHK_STATUS_L7RSP;
 	const char *desc = "Unknown feedback string";
 	const char *down_cmd = NULL;
+	int drain = 0;
 
 	cut_crlf(data);
 
@@ -844,6 +845,7 @@ static void agent_expect(struct check *check, char *data)
 		if (!desc) {
 			desc = "drain";
 			status = HCHK_STATUS_L7OKD;
+			drain = 1;
 		}
 	} else if (!strncasecmp(data, "down", strlen("down"))) {
 		down_cmd = "down";
@@ -852,6 +854,11 @@ static void agent_expect(struct check *check, char *data)
 	} else if (!strncasecmp(data, "fail", strlen("fail"))) {
 		down_cmd = "fail";
 	}
+
+	if (drain)
+		check->server->state |= SRV_DRAIN;
+	else
+		check->server->state &= ~SRV_DRAIN;
 
 	if (down_cmd) {
 		const char *end = data + strlen(down_cmd);
