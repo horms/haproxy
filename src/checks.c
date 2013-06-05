@@ -229,6 +229,12 @@ static void set_server_check_status(struct check *check, short status, const cha
 		tv_zero(&check->start);
 	}
 
+	/* Failure to connect to the agent as a secondary check should not
+	 * cause the server to be marked down. So only log status changes
+	 * for HCHK_STATUS_* statuses */
+	if (check == &s->agent && check->status < HCHK_STATUS_L7TOUT)
+		return;
+
 	if (s->proxy->options2 & PR_O2_LOGHCHKS &&
 	(((check->health != 0) && (check->result & SRV_CHK_FAILED)) ||
 	    ((check->health != s->rise + s->fall - 1) && (check->result & SRV_CHK_PASSED)) ||
@@ -397,6 +403,17 @@ void set_server_down(struct check *check)
 
 	if (s->state & SRV_MAINTAIN) {
 		check->health = s->rise;
+	}
+
+	/* The agent secondary check should only cause a server to be marked
+	 * as down if check->status is HCHK_STATUS_L7STS, which indicates
+	 * that the agent returned "fail", "stopped" or "down".
+	 * The implication here is that failure to connect to the agent
+	 * as a secondary check should not cause the server to be marked
+	 * down. */
+	if (check == &s->agent && check->status != HCHK_STATUS_L7STS) {
+		check->health = s->rise;
+		return;
 	}
 
 	if ((s->state & SRV_RUNNING && check->health == s->rise) || s->track) {
