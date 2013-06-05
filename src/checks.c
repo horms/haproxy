@@ -228,6 +228,12 @@ static void set_server_check_status(struct check *check, short status, const cha
 		tv_zero(&check->start);
 	}
 
+	/* Failure to connect to the agent as a secondary check should not
+	 * cause the server to be marked down. So only log status changes
+	 * for HCHK_STATUS_* statuses */
+	if (check == &s->agent && check->status < HCHK_STATUS_L7TOUT)
+		return;
+
 	if (s->proxy->options2 & PR_O2_LOGHCHKS &&
 	(((check->health != 0) && (check->result & SRV_CHK_FAILED)) ||
 	    ((check->health != s->rise + s->fall - 1) && (check->result & SRV_CHK_PASSED)) ||
@@ -611,6 +617,29 @@ static void set_server_enabled(struct server *s) {
 			set_server_enabled(srv);
 }
 
+static void check_failed(struct check *check)
+{
+	struct server *s = check->server;
+
+	/* The agent secondary check should only cause a server to be marked
+	 * as down if check->status is HCHK_STATUS_L7STS, which indicates
+	 * that the agent returned "fail", "stopped" or "down".
+	 * The implication here is that failure to connect to the agent
+	 * as a secondary check should not cause the server to be marked
+	 * down. */
+	if (check == &s->agent && check->status != HCHK_STATUS_L7STS) {
+		check->health = s->rise + s->fall - 1;
+		return;
+	}
+
+	if (check->health > s->rise) {
+		check->health--; /* still good */
+		s->counters.failed_checks++;
+	}
+	else
+		set_server_down(check);
+}
+
 void health_adjust(struct server *s, short status)
 {
 	int failed;
@@ -668,13 +697,7 @@ void health_adjust(struct server *s, short status)
 		case HANA_ONERR_FAILCHK:
 		/* simulate a failed health check */
 			set_server_check_status(&s->check, HCHK_STATUS_HANA, trash.str);
-
-			if (s->check.health > s->rise) {
-				s->check.health--; /* still good */
-				s->counters.failed_checks++;
-			}
-			else
-				set_server_down(&s->check);
+			check_failed(&s->check);
 
 			break;
 
@@ -854,11 +877,6 @@ static void agent_expect(struct check *check, char *data)
 		down_cmd = "fail";
 	}
 
-	if (drain)
-		check->server->state |= SRV_DRAIN;
-	else
-		check->server->state &= ~SRV_DRAIN;
-
 	if (down_cmd) {
 		const char *end = data + strlen(down_cmd);
 		/*
@@ -874,7 +892,23 @@ static void agent_expect(struct check *check, char *data)
 		}
 	}
 
+	/* Signal intended drain state.
+	 * A miss-match between the SRV_WILLDRAIN and SRV_DRAIN bits
+	 * is used by set_server_check_status to log changes
+	 * in state */
+	if (drain)
+		check->server->state |= SRV_WILLDRAIN;
+	else if (!down_cmd)
+		check->server->state &= ~SRV_WILLDRAIN;
+
 	set_server_check_status(check, status, desc);
+
+        /* Set or clear SRV_DRAIN now that any change in drain
+         * state has been detected by set_server_check_status(). */
+	if (drain)
+		check->server->state |= SRV_DRAIN;
+	else if (!down_cmd)
+		check->server->state &= ~SRV_DRAIN;
 }
 
 /*
@@ -1318,12 +1352,7 @@ static void process_result(struct check *check)
 	struct server *s = check->server;
 
 	if (check->result & SRV_CHK_FAILED) {    /* a failure or timeout detected */
-		if (check->health > s->rise) {
-			check->health--; /* still good */
-			s->counters.failed_checks++;
-		}
-		else
-			set_server_down(check);
+		check_failed(check);
 	}
 	else {  /* check was OK */
 	/* we may have to add/remove this server from the LB group */
@@ -1460,12 +1489,7 @@ static struct task *process_chk(struct task *t)
 		/* here, we have seen a synchronous error, no fd was allocated */
 
 		check->state &= ~CHK_RUNNING;
-		if (check->health > s->rise) {
-			check->health--; /* still good */
-			s->counters.failed_checks++;
-		}
-		else
-			set_server_down(check);
+		check_failed(check);
 
 		/* we allow up to min(inter, timeout.connect) for a connection
 		 * to establish but only when timeout.check is set
@@ -1546,12 +1570,7 @@ static struct task *process_chk(struct task *t)
 		}
 
 		if (check->result & SRV_CHK_FAILED) {    /* a failure or timeout detected */
-			if (check->health > s->rise) {
-				check->health--; /* still good */
-				s->counters.failed_checks++;
-			}
-			else
-				set_server_down(check);
+			check_failed(check);
 		}
 		else {  /* check was OK */
 			/* we may have to add/remove this server from the LB group */

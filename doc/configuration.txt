@@ -7706,6 +7706,9 @@ agent-port <port>
   using the "port" parameter. A third scenario is to use "http-check
   agent-hdr" to run an agent and http checks simultaneously over HTTP.
 
+  When run in this manner failure to connect to the agent is not
+  considered an error as connectivity is tested by the primary check.
+
   See also the "agent-inter" parameter.
 
 backup
