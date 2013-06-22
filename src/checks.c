@@ -239,7 +239,9 @@ static void set_server_check_status(struct check *check, short status, const cha
 	(((check->health != 0) && (check->result & SRV_CHK_FAILED)) ||
 	    ((check->health != s->rise + s->fall - 1) && (check->result & SRV_CHK_PASSED)) ||
 	    ((s->state & SRV_GOINGDOWN) && !(check->result & SRV_CHK_DISABLE)) ||
-	    (!(s->state & SRV_GOINGDOWN) && (check->result & SRV_CHK_DISABLE)))) {
+	    (!(s->state & SRV_GOINGDOWN) && (check->result & SRV_CHK_DISABLE)) ||
+	    ((s->state & SRV_WILLDRAIN) && !(s->state & SRV_DRAIN)) ||
+	    (!(s->state & SRV_WILLDRAIN) && (s->state & SRV_DRAIN)))) {
 
 		int health, rise, fall, state;
 
@@ -291,7 +293,8 @@ static void set_server_check_status(struct check *check, short status, const cha
 		chunk_appendf(&trash, ", status: %d/%d %s",
 		             (state & SRV_RUNNING) ? (health - rise + 1) : (health),
 		             (state & SRV_RUNNING) ? (fall) : (rise),
-		             (state & SRV_RUNNING)?"UP":"DOWN");
+		             (state & SRV_RUNNING) ?
+			     ((state & SRV_WILLDRAIN) ? "DRAIN" : "UP") : "DOWN");
 
 		Warning("%s.\n", trash.str);
 		send_log(s->proxy, LOG_NOTICE, "%s.\n", trash.str);
