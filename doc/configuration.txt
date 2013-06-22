@@ -11969,6 +11969,30 @@ prompt
 quit
   Close the connection when in interactive mode.
 
+set agent <backend>/<server> pause|unpause
+  Change the behaviour of agent checks.
+
+  In the case where an agent check is being run as a secondary check,
+  due to the agent-port parameter of a server directive, new checks
+  are only initialised when the agent is in the unpaused state. Thus,
+  setting the agent to pause will prevent any new agent checks from
+  begin initiated until the agent is set to unpaused.
+
+  When set pause is in effect the processing of an agent check run as the
+  primary check, due to either option lb-agent-check or http-check
+  agent-hdr being set, or processing of a secondary agent check that was
+  initiated while the agent was set as unpaused is as follows: All results
+  that would alter the weight, specifically "drain" or a weight returned by
+  the agent, are ignored. The processing of agent check is otherwise
+  unchanged.
+
+  The motivation for this option is to allow weight setting is to allow the
+  weight changing effects of the agent checks to be paused to allow the
+  weight of a server to be configured using set weight without being
+  overridden by the agent.
+
+  The default state is unpaused.
+
 set maxconn frontend <frontend> <value>
   Dynamically change the specified frontend's maxconn setting. Any positive
   value is allowed including zero, but setting values larger than the global
