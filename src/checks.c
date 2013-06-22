@@ -857,16 +857,31 @@ static void agent_expect(struct check *check, char *data)
 	const char *desc = "Unknown feedback string";
 	const char *down_cmd = NULL;
 	int drain = 0;
+	bool paused;
+
+	/* The agent may have been paused after a check was initialised.
+	 * If so, ignore weight changes and drain settings from the agent.
+	 * Note that the seting is always present in the the state of the
+	 * agent the server, regardless of if the agent is being run
+	 * as a primary or secondary check. That is, regardless
+	 * of if the check parameter of this function is the agent or
+	 * check field of the server.
+	 */
+	paused = check->server->agent.state & CHK_PAUSED;
 
 	cut_crlf(data);
 
 	if (strchr(data, '%')) {
 		desc = server_parse_weight_change_request(check->server, data);
 		if (!desc) {
+			if (paused)
+				return;
 			status = HCHK_STATUS_L7OKD;
 			desc = data;
 		}
 	} else if (!strcasecmp(data, "drain")) {
+		if (paused)
+			return;
 		desc = server_parse_weight_change_request(check->server, "0%");
 		if (!desc) {
 			desc = "drain";
@@ -1392,10 +1407,14 @@ static struct task *process_chk(struct task *t)
 		if (!expired) /* woke up too early */
 			return t;
 
-		/* we don't send any health-checks when the proxy is stopped or when
-		 * the server should not be checked.
+		/* we don't send any health-checks when the proxy is
+		 * stopped, the server should not be checked or the check
+		 * is paused.
 		 */
-		if (!(s->state & SRV_CHECKED) || s->proxy->state == PR_STSTOPPED || (s->state & SRV_MAINTAIN))
+		if (!(s->state & SRV_CHECKED) ||
+		    s->proxy->state == PR_STSTOPPED ||
+		    (s->state & SRV_MAINTAIN) ||
+		    (check->state & CHK_PAUSED))
 			goto reschedule;
 
 		/* we'll initiate a new check */
