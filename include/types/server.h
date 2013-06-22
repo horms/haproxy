@@ -73,6 +73,7 @@
 
 /* check flags */
 #define CHK_RUNNING	0x0001  /* this check is currently running */
+#define CHK_PAUSED	0x0002  /* this check is currently administratively paused */
 
 /* various constants */
 #define SRV_UWGHT_RANGE 256

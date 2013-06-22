@@ -1137,6 +1137,23 @@ static int stats_sock_parse_request(struct stream_interface *si, char *line)
 				return 1;
 			}
 		}
+		else if (strcmp(args[1], "agent") == 0) {
+			struct server *sv;
+
+			sv = expect_server_admin(s, si, args[2]);
+			if (!sv)
+				return 1;
+
+			if (strcmp(args[3], "pause") == 0) {
+				sv->agent.state |= CHK_PAUSED;
+			} else if (strcmp(args[3], "unpause") == 0) {
+				sv->agent.state &= ~CHK_PAUSED;
+			} else {
+				si->applet.ctx.cli.msg = "unknown agent state, should be pause or unpause";
+				si->applet.st0 = STAT_CLI_PRINT;
+			}
+			return 1;
+		}
 		else if (strcmp(args[1], "maxconn") == 0) {
 			if (strcmp(args[2], "frontend") == 0) {
 				struct proxy *px;
