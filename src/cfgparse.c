@@ -4943,7 +4943,7 @@ stats_error_parsing:
 				goto out;
 			}
 
-			if (newsrv->proxy->options2 & PR_O2_LB_AGENT_CHK) {
+			if ((newsrv->proxy->options2 & PR_O2_CHK_ANY) == PR_O2_LB_AGENT_CHK) {
 				Alert("parsing [%s:%d] : server %s has agent-inter or agent-port but check type is lb-agent-chk.\n",
 				      file, linenum, newsrv->id);
 				err_code |= ERR_ALERT | ERR_FATAL;
