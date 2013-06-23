@@ -1712,13 +1712,11 @@ int start_checks() {
 				continue;
 
 			/* A task for the primary check */
-			s->check.type = s->proxy->options2 & PR_O2_CHK_ANY;
 			if (start_check_task(&s->check, mininter, nbcheck, srvpos++))
 				return -1;
 
 			/* A task for a secondary agent check */
-			if (s->agent.port) {
-				s->agent.type = PR_O2_LB_AGENT_CHK;
+			if (s->agent.type) {
 				if (start_check_task(&s->agent, mininter, nbcheck, srvpos++))
 					return -1;
 			}

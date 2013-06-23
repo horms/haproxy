@@ -1624,8 +1624,11 @@ out:
 	return err_code;
 }
 
-static int init_check(struct server *s, struct check *check, const char * file, int linenum)
+static int init_check(struct server *s, struct check *check, int type, const char * file, int linenum)
 {
+	check->server = s;
+	check->type = type;
+
 	/* Allocate buffer for requests... */
 	if ((check->bi = calloc(sizeof(struct buffer) + global.tune.chksize, sizeof(char))) == NULL) {
 		Alert("parsing [%s:%d] : out of memory while allocating check buffer.\n", file, linenum);
@@ -1647,7 +1650,6 @@ static int init_check(struct server *s, struct check *check, const char * file, 
 	}
 
 	check->conn->t.sock.fd = -1; /* no agent in progress yet */
-	check->server = s;
 
 	return 0;
 }
@@ -4923,8 +4925,7 @@ stats_error_parsing:
 				err_code |= ERR_ALERT | ERR_FATAL;
 				goto out;
 			}
-
-			ret = init_check(newsrv, &newsrv->check, file, linenum);
+			ret = init_check(newsrv, &newsrv->check, newsrv->proxy->options2 & PR_O2_CHK_ANY, file, linenum);
 			if (ret) {
 				err_code |= ret;
 				goto out;
@@ -4953,7 +4954,7 @@ stats_error_parsing:
 			if (!newsrv->agent.inter)
 				newsrv->agent.inter = newsrv->check.inter;
 
-			ret = init_check(newsrv, &newsrv->agent, file, linenum);
+			ret = init_check(newsrv, &newsrv->agent, PR_O2_LB_AGENT_CHK, file, linenum);
 			if (ret) {
 				err_code |= ret;
 				goto out;
@@ -5071,7 +5072,6 @@ stats_error_parsing:
 				goto out;
 
 			}
-	    
 			logsrv->level = 7; /* max syslog level = debug */
 			if (*(args[3])) {
 				logsrv->level = get_log_level(args[3]);
