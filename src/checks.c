@@ -1854,7 +1854,7 @@ static struct task *process_chk(struct task *t)
 				else if (expired)
 					set_server_check_status(check, HCHK_STATUS_L6TOUT, NULL);
 			}
-			else if (!(s->proxy->options2 & PR_O2_CHK_ANY)) {
+			else if (!check->type) {
 				/* good connection is enough for pure TCP check */
 				if (check->use_ssl)
 					set_server_check_status(check, HCHK_STATUS_L6OK, NULL);
@@ -1880,7 +1880,7 @@ static struct task *process_chk(struct task *t)
 			}
 			else if (expired) {
 				/* connection established but expired check */
-				if ((s->proxy->options2 & PR_O2_CHK_ANY) == PR_O2_SSL3_CHK)
+				if (check->type == PR_O2_SSL3_CHK)
 					set_server_check_status(check, HCHK_STATUS_L6TOUT, NULL);
 				else	/* HTTP, SMTP, ... */
 					set_server_check_status(check, HCHK_STATUS_L7TOUT, NULL);
