@@ -4341,6 +4341,7 @@ stats_error_parsing:
 				cur_arg += 2;
 			}
 			else if (!strcmp(args[cur_arg], "agent-port")) {
+				global.maxsock++;
 				newsrv->agent.port = atol(args[cur_arg + 1]);
 				do_agent = 1;
 				cur_arg += 2;
