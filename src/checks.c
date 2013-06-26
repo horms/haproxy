@@ -1414,18 +1414,18 @@ static int establish_conn_chk(struct task *t)
 	int ret;
 
 	/* prepare the check buffer */
-	if (s->proxy->options2 & PR_O2_CHK_ANY) {
+	if (check->type) {
 		bo_putblk(check->bo, s->proxy->check_req, s->proxy->check_len);
 
 		/* we want to check if this host replies to HTTP or SSLv3 requests
 		 * so we'll send the request, and won't wake the checker up now.
 		 */
-		if ((s->proxy->options2 & PR_O2_CHK_ANY) == PR_O2_SSL3_CHK) {
+		if (check->type == PR_O2_SSL3_CHK) {
 			/* SSL requires that we put Unix time in the request */
 			int gmt_time = htonl(date.tv_sec);
 			memcpy(check->bo->data + 11, &gmt_time, 4);
 		}
-		else if ((s->proxy->options2 & PR_O2_CHK_ANY) == PR_O2_HTTP_CHK) {
+		else if (check->type == PR_O2_HTTP_CHK) {
 			if (s->proxy->options2 & PR_O2_CHK_SNDST)
 				bo_putblk(check->bo, trash.str, httpchk_build_status_header(s, trash.str));
 			bo_putstr(check->bo, "\r\n");
@@ -1453,8 +1453,8 @@ static int establish_conn_chk(struct task *t)
 
 	ret = SN_ERR_INTERNAL;
 	if (s->check_common.proto->connect)
-		ret = s->check_common.proto->connect(conn, s->proxy->options2 & PR_O2_CHK_ANY,
-		                              check->send_proxy ? 1 : (s->proxy->options2 & PR_O2_CHK_ANY) ? 0 : 2);
+		ret = s->check_common.proto->connect(conn, check->type,
+		                              check->send_proxy ? 1 : check->type ? 0 : 2);
 	conn->flags |= CO_FL_WAKE_DATA;
 
 	return ret;
