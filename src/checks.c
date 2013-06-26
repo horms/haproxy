@@ -237,7 +237,7 @@ static void set_server_check_status(struct check *check, short status, const cha
 	/* Failure to connect to the agent as a secondary check should not
 	 * cause the server to be marked down. So only log status changes
 	 * for HCHK_STATUS_* statuses */
-	if (check == &s->agent && check->status < HCHK_STATUS_L7TOUT)
+	if (check == &s->agent && check->status <= HCHK_STATUS_L7TOUT)
 		return;
 
 	if (s->proxy->options2 & PR_O2_LOGHCHKS &&
