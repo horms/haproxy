@@ -1839,7 +1839,7 @@ static struct task *process_chk(struct task *t)
 		 * First, let's check whether there was an uncaught error,
 		 * which can happen on connect timeout or error.
 		 */
-		if (s->check.result == SRV_CHK_UNKNOWN) {
+		if (check->result == SRV_CHK_UNKNOWN) {
 			if (has_conn && (conn->flags & (CO_FL_CONNECTED|CO_FL_WAIT_L4_CONN)) == CO_FL_WAIT_L4_CONN) {
 				/* L4 not established (yet) */
 				if (conn->flags & CO_FL_ERROR)
