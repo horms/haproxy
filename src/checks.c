@@ -867,10 +867,7 @@ static void agent_expect(struct check *check, char *data)
 		 */
 		if (end[0] == '\0' || end[0] == ' ' || end[0] == '\t') {
 			status = HCHK_STATUS_L7STS;
-			/* Skip over leading blanks */
-			while (end[0] != '\0' && (end[0] == ' ' || end[0] == '\t'))
-				end++;
-			desc = end;
+			desc = data;
 		}
 	}
 
