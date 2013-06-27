@@ -1633,6 +1633,8 @@ static int prepare_external_check(struct check *check)
 		un = (struct sockaddr_un *)&listener->addr;
 		check->argv[3] = strdup(un->sun_path);
 		argc = 4;
+	} else {
+		goto err;
 	}
 
 	for (i = 0; i < argc; i++)
