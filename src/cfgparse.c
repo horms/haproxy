@@ -1328,8 +1328,10 @@ void init_default_instance()
 	defproxy.defsrv.agent.inter = DEF_CHKINTR;
 	defproxy.defsrv.agent.fastinter = 0;
 	defproxy.defsrv.agent.downinter = 0;
-	defproxy.defsrv.rise = DEF_RISETIME;
-	defproxy.defsrv.fall = DEF_FALLTIME;
+	defproxy.defsrv.check.rise = DEF_RISETIME;
+	defproxy.defsrv.check.fall = DEF_FALLTIME;
+	defproxy.defsrv.agent.rise = DEF_AGENT_RISETIME;
+	defproxy.defsrv.agent.fall = DEF_AGENT_FALLTIME;
 	defproxy.defsrv.check.port = 0;
 	defproxy.defsrv.agent.port = 0;
 	defproxy.defsrv.maxqueue = 0;
@@ -4268,8 +4270,6 @@ stats_error_parsing:
 			newsrv->agent.inter	= curproxy->defsrv.agent.inter;
 			newsrv->agent.fastinter	= curproxy->defsrv.agent.fastinter;
 			newsrv->agent.downinter	= curproxy->defsrv.agent.downinter;
-			newsrv->rise		= curproxy->defsrv.rise;
-			newsrv->fall		= curproxy->defsrv.fall;
 			newsrv->maxqueue	= curproxy->defsrv.maxqueue;
 			newsrv->minconn		= curproxy->defsrv.minconn;
 			newsrv->maxconn		= curproxy->defsrv.maxconn;
@@ -4284,13 +4284,17 @@ stats_error_parsing:
 						= curproxy->defsrv.iweight;
 
 			newsrv->check.status	= HCHK_STATUS_INI;
-			newsrv->check.health	= newsrv->rise;	/* up, but will fall down at first failure */
+			newsrv->check.rise		= curproxy->defsrv.check.rise;
+			newsrv->check.fall		= curproxy->defsrv.check.fall;
+			newsrv->check.health	= newsrv->check.rise;	/* up, but will fall down at first failure */
 			newsrv->check.type	= curproxy->options2 & PR_O2_CHK_ANY;
 			newsrv->check.name	= "Health";
 			newsrv->check.server	= newsrv;
 
 			newsrv->agent.status	= HCHK_STATUS_INI;
-			newsrv->agent.health	= newsrv->rise;	/* up, but will fall down at first failure */
+			newsrv->agent.rise	= curproxy->defsrv.agent.rise;
+			newsrv->agent.fall	= curproxy->defsrv.agent.fall;
+			newsrv->agent.health	= newsrv->agent.rise;	/* up, but will fall down at first failure */
 			newsrv->agent.type	= PR_O2_LB_AGENT_CHK;
 			newsrv->agent.name	= "Agent";
 			newsrv->agent.server	= newsrv;
@@ -4343,8 +4347,8 @@ stats_error_parsing:
 					goto out;
 				}
 
-				newsrv->rise = atol(args[cur_arg + 1]);
-				if (newsrv->rise <= 0) {
+				newsrv->check.rise = atol(args[cur_arg + 1]);
+				if (newsrv->check.rise <= 0) {
 					Alert("parsing [%s:%d]: '%s' has to be > 0.\n",
 						file, linenum, args[cur_arg]);
 					err_code |= ERR_ALERT | ERR_FATAL;
@@ -4352,13 +4356,11 @@ stats_error_parsing:
 				}
 
 				if (newsrv->check.health)
-					newsrv->check.health = newsrv->rise;
-				if (newsrv->agent.health)
-					newsrv->agent.health = newsrv->rise;
+					newsrv->check.health = newsrv->check.rise;
 				cur_arg += 2;
 			}
 			else if (!strcmp(args[cur_arg], "fall")) {
-				newsrv->fall = atol(args[cur_arg + 1]);
+				newsrv->check.fall = atol(args[cur_arg + 1]);
 
 				if (!*args[cur_arg + 1]) {
 					Alert("parsing [%s:%d]: '%s' expects an integer argument.\n",
@@ -4367,7 +4369,7 @@ stats_error_parsing:
 					goto out;
 				}
 
-				if (newsrv->fall <= 0) {
+				if (newsrv->check.fall <= 0) {
 					Alert("parsing [%s:%d]: '%s' has to be > 0.\n",
 						file, linenum, args[cur_arg]);
 					err_code |= ERR_ALERT | ERR_FATAL;
