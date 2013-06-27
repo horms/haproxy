@@ -636,10 +636,8 @@ static void check_failed(struct check *check)
 	 * The implication here is that failure to connect to the agent
 	 * as a secondary check should not cause the server to be marked
 	 * down. */
-	if (check == &s->agent && check->status != HCHK_STATUS_L7STS) {
-		check->health = s->rise + s->fall - 1;
+	if (check == &s->agent && check->status != HCHK_STATUS_L7STS)
 		return;
-	}
 
 	if (check->health > s->rise) {
 		check->health--; /* still good */
