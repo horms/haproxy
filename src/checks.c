@@ -1409,8 +1409,11 @@ static int establish_conn_chk(struct task *t)
 	struct connection *conn = check->conn;
 	int ret;
 
-	/* prepare the check buffer */
-	if (check->type) {
+	/* prepare the check buffer
+	 * This should not be used if check is the secondary agent check
+	 * of a server as s->proxy->check_req will relate to the
+	 * configuration of the primary check */
+	if (check->type && check != &s->agent) {
 		bo_putblk(check->bo, s->proxy->check_req, s->proxy->check_len);
 
 		/* we want to check if this host replies to HTTP or SSLv3 requests
