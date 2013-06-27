@@ -1376,7 +1376,7 @@ static void process_result(struct check *check)
 		check_failed(check);
 	}
 	else {  /* check was OK */
-	/* we may have to add/remove this server from the LB group */
+		/* we may have to add/remove this server from the LB group */
 		if ((s->state & SRV_RUNNING) && (s->proxy->options & PR_O_DISABLE404)) {
 			if ((s->state & SRV_GOINGDOWN) && !(check->result & SRV_CHK_DISABLE))
 				set_server_enabled(s);
@@ -1389,6 +1389,7 @@ static void process_result(struct check *check)
 			set_server_up(check);
 		}
 	}
+	check->state &= ~CHK_RUNNING;
 }
 
 /*
@@ -1911,26 +1912,6 @@ static struct task *process_chk(struct task *t)
 		    check->server->agent.state != HCHK_STATUS_INI) {
 			process_result(&check->server->agent);
 		}
-
-		if (check->result & SRV_CHK_FAILED) {    /* a failure or timeout detected */
-			check_failed(check);
-		}
-		else {  /* check was OK */
-			/* we may have to add/remove this server from the LB group */
-			if ((s->state & SRV_RUNNING) && (s->proxy->options & PR_O_DISABLE404)) {
-				if ((s->state & SRV_GOINGDOWN) && !(check->result & SRV_CHK_DISABLE))
-					set_server_enabled(s);
-				else if (!(s->state & SRV_GOINGDOWN) && (check->result & SRV_CHK_DISABLE))
-					set_server_disabled(check);
-			}
-
-			if (check->health < s->rise + s->fall - 1) {
-				check->health++; /* was bad, stays for a while */
-				set_server_up(check);
-			}
-		}
-		check->state &= ~CHK_RUNNING;
-
 
 		if (!has_conn)
 			pid_list_del(check->curpid);
